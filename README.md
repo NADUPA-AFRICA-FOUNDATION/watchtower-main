@@ -308,3 +308,10 @@ key, so there's no excuse to skip them.
 Add a source by writing one function in `core/sources.py` with the signature
 `(query, fetcher, hours, limit) -> list[Item]` and registering it in `BACKENDS`.
 Nothing else changes.
+
+## Autonomous hunting
+
+Beyond sweeps and the scam-site queue, Mnara can hunt on its own: it discovers candidate impersonation
+infrastructure (certificate transparency, typo generation, public search, pivots on shared phone numbers and
+payment ids), explains every score, links related sites into campaigns and keeps the evidence.
+Start it with `python run.py hunt`; see [HUNTER.md](HUNTER.md).

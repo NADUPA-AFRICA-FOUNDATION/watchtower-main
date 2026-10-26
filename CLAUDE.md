@@ -4,7 +4,8 @@ Context for Claude Code sessions in this repo. Read this before changing anythin
 
 ## What this is
 
-**Two separate engines behind one front door.** They share the Python
+**Two separate engines behind one front door, plus an autonomous hunter on the watchtower side
+(`hunter/`, see `HUNTER.md`).** They share the Python
 environment, the `.env`, the house style, and — since the merge — the web UI,
 which has a watchtower side and a scamscan side. Nothing below that is shared:
 no shared database, no shared config, and the dependency runs one way only.
@@ -56,6 +57,11 @@ python scamscan.py queue --min-score 45
 python scamscan.py test "<text>" --url <url>   # offline scoring, no API calls
 python scamscan.py selftest                    # schema lint, tool version, lexicon audit
 python scamscan.py selftest --live             # ~1 search: does the schema survive web search?
+
+# autonomous hunter (HUNTER.md; own config hunter.yaml, own store hunter.db)
+python run.py hunt                           # the scheduler; --once runs every job once
+python -m hunter coverage                    # source health. Also: explain, lineage, campaigns, alerts, rescore, purge ...
+python -m pytest -q                          # hunter + investigation + security suites (offline)
 
 # tests — all four, no network, no API key, seconds
 python smoke_test.py     # watchtower: store, dedupe, FTS5, alerts
@@ -255,6 +261,30 @@ and model scores. Three inputs the scorer itself cannot see:
   read, so it is capped at 55 and flagged in the UI. A matching headline means
   the words appeared, not that the piece is about your query.
 
+## hunter
+
+`hunter/` discovers candidate infrastructure itself (CT, typo generation, public search, pivots), enriches it
+in stages, extracts signals, scores it, correlates it into campaigns, and raises rare alerts. It reuses
+`investigation/` (graph store, additively extended) and `watchtower/discovery/` (safe fetcher, page parser)
+and is **independent of scamscan**: it imports nothing from it and nothing imports it (a test enforces this).
+`HUNTER.md` is the operator guide; `HUNTER_PLAN.md` holds the decisions and findings. The rules that must hold:
+
+- **Unseen is not clean.** A page that was blocked, challenged, JS-only, unreachable or not fetched, or a name
+  that does not resolve, scores as `UNASSESSED`, never `LOW`. A search that was blocked is never "no results"
+  (DuckDuckGo needs a passing control query first). Missing RDAP is never a risk factor.
+- **Every score is explainable and reproducible:** reason weights sum to the score; each reason cites evidence
+  ids or a stated basis; `gather_inputs()` rebuilds a score from stored evidence only. No model in that path,
+  and no weight changes by itself: only config edits, or an administrator approving a trusted classification.
+- **Evidence is append-only.** Only the retention purge rewrites it, and it leaves an audit row.
+- **GET only, no JavaScript, no credentials, no payments, no CAPTCHA handling.** Forms are parsed, never filled.
+  One definition of a public address (`is_public_ip`) guards fetching, TLS and queueing.
+- **Weak links never make a campaign** (registrar, CDN, a link to the same site). One strong link, or two
+  independent medium links. Derived edges cite a correlation evidence row.
+- **Recursion is bounded on every axis** and every skipped pivot is counted and logged on its parent.
+- **Advisory pages are quoted indicators, not actors:** no pivots from them; negation, not "beware", demotes a
+  phrase match, because an attacker can add the latter.
+- Fixtures: vary certificates and nameservers per fake domain, or any two domains look linked by two medium links.
+
 ## Conventions
 
 Adding a sweep source: one function in `core/sources.py` with signature
@@ -308,6 +338,7 @@ Verified in Chrome at 1440 / 820 / 380px on 2026-08-13: layout, the sweep
 trace, all four relevance bands, sticky sidebar, keyboard focus rings,
 `prefers-reduced-motion`, offline font fallback, empty/error/no-source states,
 and that a finished sweep does not silently re-run.
+- The hunter's crt.sh queries often 502 and DuckDuckGo soft-blocks bots; both are reported, not hidden (see `HUNTER.md`).
 - No authentication on the web server. It binds to localhost. Anything beyond
   that needs a reverse proxy with auth first.
 - `adapters/webpage.py` reads PDFs via `pypdf`, but a scanned circular has no

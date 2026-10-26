@@ -24,3 +24,6 @@ venv/
 
 # Runtime databases
 *.db
+# Hunter SQLite sidecar files
+*.db-wal
+*.db-shm

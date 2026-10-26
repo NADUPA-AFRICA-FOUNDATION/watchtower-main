@@ -14,7 +14,6 @@ Evidence categories:
 
 from __future__ import annotations
 
-import hashlib
 import logging
 import re
 from dataclasses import dataclass, field

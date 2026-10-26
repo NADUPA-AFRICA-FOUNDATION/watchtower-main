@@ -7,6 +7,7 @@
     python run.py run              # all three, in order (this is your cron job)
     python run.py search "query"   # FTS5 search over the archive
     python run.py stats
+    python run.py hunt             # the autonomous hunter (see HUNTER_PLAN.md); --once runs every job once
 """
 
 from __future__ import annotations
@@ -266,7 +267,7 @@ def main() -> None:
     )
     ap.add_argument("command",
                     choices=["sweep", "collect", "enrich", "alert", "run",
-                             "search", "stats", "sources", "models", "serve"])
+                             "search", "stats", "sources", "models", "serve", "hunt"])
     ap.add_argument("query", nargs="?", default="")
     ap.add_argument("--config", default="config.yaml")
     # sweep options
@@ -281,10 +282,16 @@ def main() -> None:
                     help="cap on items sent to the model")
     ap.add_argument("--save", action="store_true",
                     help="also store results in the archive")
+    # hunt options
+    ap.add_argument("--once", action="store_true", help="hunt: run every job once, then exit")
     # serve options
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8000)
     args = ap.parse_args()
+
+    if args.command == "hunt":
+        from hunter.__main__ import main as hunter_main
+        sys.exit(hunter_main(["run"] + (["--once"] if args.once else [])))
 
     if args.command == "serve":
         import uvicorn

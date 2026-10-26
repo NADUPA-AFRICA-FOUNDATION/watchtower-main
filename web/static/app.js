@@ -289,7 +289,7 @@ async function refreshSystemHealth(sourceData = capabilities) {
 
 // Refresh live health when returning to the workspace; this is intentionally
 // low frequency so status checks never compete with an active sweep.
-window.setInterval(() => refreshSystemHealth(), 60000);
+window.setInterval(() => { if (!document.hidden) refreshSystemHealth(); }, 60000);   // a background tab polls nothing
 
 $("#status-toggle").onclick = () => {
   const details = $("#status-details");
@@ -381,11 +381,13 @@ $("#reset-controls").onclick = resetMonitorControls;
 /* Two tools, one front door. The views are independent — nothing on the
    scamscan side reads watchtower's store and vice versa — so switching sides
    is only ever showing and hiding, never a state handover. */
-const VIEWS = ["sweep", "archive", "discover", "queue", "score"];
+const VIEWS = ["sweep", "archive", "discover", "queue", "score", "hunt", "campaigns", "huntops"];
 const MODE_VIEWS = {
   monitor: ["sweep", "archive"],
   investigate: ["discover", "queue", "score"],
+  hunt: ["hunt", "campaigns", "huntops"],
 };
+const SIDE_MODE = { watchtower: "monitor", scamscan: "investigate", hunter: "hunt" };
 
 function setMode(mode, navigate = true) {
   const views = MODE_VIEWS[mode] || MODE_VIEWS.monitor;
@@ -411,7 +413,7 @@ document.querySelectorAll(".mode-tab").forEach((button) => {
 
 document.querySelectorAll(".tab").forEach((tab) => {
   tab.onclick = () => {
-    setMode(tab.dataset.side === "scamscan" ? "investigate" : "monitor", false);
+    setMode(SIDE_MODE[tab.dataset.side] || "monitor", false);
     document.querySelectorAll(".tab").forEach((t) => {
       t.classList.remove("is-on");
       t.removeAttribute("aria-current");
@@ -427,6 +429,7 @@ document.querySelectorAll(".tab").forEach((tab) => {
     const heading = document.querySelector(`#view-${tab.dataset.view} .view-head`);
     if (heading) heading.focus();
     if (tab.dataset.view === "queue") loadQueue();
+    if (window.hunterOnView) window.hunterOnView(tab.dataset.view);
   };
 });
 

@@ -24,9 +24,10 @@ from dataclasses import asdict
 from pathlib import Path
 
 import yaml
-from fastapi import Body, FastAPI, HTTPException, Query
+from fastapi import Body, FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.gzip import GZipMiddleware
 
 from core import report
 from core.enrich import Enricher
@@ -108,6 +109,9 @@ SWEEP_BUDGET = (
 )
 
 app = FastAPI(title="Mnara", docs_url="/api/docs")
+# JSON and the 200KB of JS/CSS compress ~5x. Starlette's gzip leaves text/event-stream alone, so the live
+# sweep trace is still delivered frame by frame.
+app.add_middleware(GZipMiddleware, minimum_size=800)
 
 
 def investigation_store() -> InvestigationStore:
@@ -117,12 +121,21 @@ def investigation_store() -> InvestigationStore:
     )
 
 
+_CONFIG_CACHE: dict = {}
+
+
 def config() -> dict:
+    """Parsed config.yaml, re-read only when the file changes (it was re-parsed on every request).
+    Returned as a copy so a caller editing it cannot leak into the next request."""
+    import copy
     from run import expand_env
 
-    return expand_env(
-        yaml.safe_load((ROOT / "config.yaml").read_text(encoding="utf-8"))
-    )
+    path = ROOT / "config.yaml"
+    stamp = (path.stat().st_mtime_ns, tuple(sorted(os.environ.items())))
+    hit = _CONFIG_CACHE.get("v")
+    if hit is None or hit[0] != stamp:
+        hit = _CONFIG_CACHE["v"] = (stamp, expand_env(yaml.safe_load(path.read_text(encoding="utf-8"))))
+    return copy.deepcopy(hit[1])
 
 
 def data_path(relative) -> Path:
@@ -1246,4 +1259,38 @@ def get_report(name: str):
     return FileResponse(path, media_type=media_type, filename=name)
 
 
-app.mount("/", StaticFiles(directory=STATIC, html=True), name="static")
+_HUNTER_CFG: dict = {}
+
+
+def _hunter_config():
+    """hunter.yaml, parsed once per edit. Config objects are never mutated, so sharing one is safe."""
+    from hunter.config import load as load_hunter_config
+    path = ROOT / "hunter.yaml"
+    stamp = path.stat().st_mtime_ns
+    if _HUNTER_CFG.get("stamp") != stamp:
+        _HUNTER_CFG.update(stamp=stamp, cfg=load_hunter_config(path))
+    return _HUNTER_CFG["cfg"]
+
+
+def _analyst_identity(request: Request, claimed: str) -> tuple[str, str]:
+    """Who is acting. With auth on, the authenticated account; otherwise the name typed in, labelled as such."""
+    if _request_requires_auth(request):
+        return WT_USER, "authenticated"
+    return (claimed or "").strip()[:100], "self_asserted"
+
+
+from web.hunter_routes import build_router  # noqa: E402  (kept next to the mount: routes must precede it)
+
+app.include_router(build_router(lambda: data_path("hunter.db"), _hunter_config, _analyst_identity, lambda: EPHEMERAL))
+
+class _RevalidatingStatic(StaticFiles):
+    """Static files carry an ETag already; `no-cache` makes the browser revalidate (a 304, no body) instead of
+    guessing a freshness window, so edits still show immediately and repeat loads cost almost nothing."""
+
+    async def get_response(self, path, scope):
+        resp = await super().get_response(path, scope)
+        resp.headers.setdefault("Cache-Control", "no-cache")
+        return resp
+
+
+app.mount("/", _RevalidatingStatic(directory=STATIC, html=True), name="static")

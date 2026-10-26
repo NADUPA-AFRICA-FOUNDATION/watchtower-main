@@ -29,16 +29,31 @@ import os
 import random
 import time
 
-try:
-    import anthropic
-except ImportError:
-    anthropic = None
+class _Lazy:
+    """Defer a heavy SDK import to first use. `anthropic` and `google.genai` cost ~1s of start-up between
+    them, and most commands (serve, search, the hunter) never call a model. Availability is still decided
+    up front with find_spec, so `x is not None` keeps meaning "installed"."""
+    def __init__(self, name):
+        self._name, self._mod = name, None
 
-try:
-    from google import genai
-    from google.genai import types as genai_types
-except ImportError:
-    genai = genai_types = None
+    def __getattr__(self, attr):
+        if self._mod is None:
+            import importlib
+            self._mod = importlib.import_module(self._name)
+        return getattr(self._mod, attr)
+
+
+def _lazy(name):
+    import importlib.util
+    try:
+        return _Lazy(name) if importlib.util.find_spec(name) else None
+    except (ImportError, ValueError):
+        return None
+
+
+anthropic = _lazy("anthropic")
+genai = _lazy("google.genai")
+genai_types = _Lazy("google.genai.types") if genai is not None else None  # not _lazy(): find_spec imports the parent package
 
 class _DropThoughtPartWarning(logging.Filter):
     """Silence one specific, per-item SDK warning.

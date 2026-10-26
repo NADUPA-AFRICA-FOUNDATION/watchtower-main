@@ -15,6 +15,7 @@ import threading
 import time
 import urllib.robotparser
 from dataclasses import dataclass
+from typing import Any
 from urllib.parse import urlparse
 
 import httpx
@@ -153,7 +154,7 @@ class Fetcher:
         for attempt in range(retries + 1):
             self._throttle(domain)
             try:
-                request_options = {"headers": headers or None}
+                request_options: dict[str, Any] = {"headers": headers or None}
                 if timeout is not None:
                     request_options["timeout"] = timeout
                 r = self.client.get(url, **request_options)

@@ -511,7 +511,7 @@ def main():
 
     print("\ntwo sides, one page")
     sides = set(re.findall(r'data-side="(\w+)"', html))
-    ok &= check("the nav declares both tools", sides == {"watchtower", "scamscan"})
+    ok &= check("the nav declares all three workspaces", sides == {"watchtower", "scamscan", "hunter"})
     tab_views = set(re.findall(r'class="tab[^"]*" data-view="(\w+)"', html))
     ok &= check("every tab has a section to show",
                 all(f"view-{v}" in html_ids for v in tab_views))
@@ -519,6 +519,35 @@ def main():
                 re.search(r'VIEWS\s*=\s*\[([^\]]+)\]', js)
                 and tab_views <= set(re.findall(
                     r'"(\w+)"', re.search(r'VIEWS\s*=\s*\[([^\]]+)\]', js).group(1))))
+    print("\nautonomous hunting frontend")
+    hjs = (static / "hunter.js").read_text()
+    hcss = (static / "hunter.css").read_text()
+    ok &= check("hunter script and stylesheet are linked and served",
+                '/hunter.js' in html and '/hunter.css' in html
+                and client.get("/hunter.js").status_code == 200 and client.get("/hunter.css").status_code == 200)
+    used_ids = set(re.findall(r'\$h\("#(hx-[\w-]+)"', hjs))
+    ok &= check("every element hunter.js looks up is defined by the page or by the script's own templates",
+                used_ids and all(f'id="{i}"' in html or f'id="{i}"' in hjs for i in used_ids)
+                and {"hx-metrics", "hx-feed", "hx-detail", "hx-campaigns", "hx-queue", "hx-sources", "hx-alerts"} <= used_ids)
+    ok &= check("the hunt workspace has a mode tab, three tabs, and sections for each",
+                'data-mode="hunt"' in html
+                and all(f'data-view="{v}" data-side="hunter"' in html and f'id="view-{v}"' in html
+                        for v in ("hunt", "campaigns", "huntops"))
+                and "hunt: [" in js and "SIDE_MODE" in js and "hunterOnView" in js)
+    # The OpenAPI schema, not app.routes: newer FastAPI wraps include_router() output in an object with no .path.
+    api_paths = set(webapp.app.openapi()["paths"])
+    used_api = {"/api/hunter" + p for p in re.findall(r'api\(`?"?(/[\w/-]+)', hjs)}
+    ok &= check("every hunter API path the script calls is routed",
+                used_api and all(any(re.fullmatch(re.sub(r"\{[^}]+\}", "[^/]+", route), path.split("?")[0].rstrip("/"))
+                                     or route.startswith(path.split("?")[0].rstrip("/"))
+                                     for route in api_paths if route.startswith("/api/hunter"))
+                                 for path in used_api))
+    ok &= check("hunter.js escapes everything it renders and builds no dynamic URLs or code",
+                "const esc =" in hjs and hjs.count("esc(") > 80
+                and "eval(" not in hjs and "document.write" not in hjs and 'href="${' not in hjs
+                and not re.search(r"innerHTML\s*=\s*[a-z]+\.[a-z_]+\s*;", hjs))
+    ok &= check("hunter.css uses the app's relevance colours for classification chips",
+                all(c in hcss for c in (".hx-HIGH_PRIORITY", ".hx-SUSPICIOUS", ".hx-UNASSESSED", "var(--high", "var(--med")))
     ok &= check("the rail names the side you are on",
                 'id="rail-name"' in html and "#rail-name" in js)
     ok &= check("navigation uses task-oriented labels",

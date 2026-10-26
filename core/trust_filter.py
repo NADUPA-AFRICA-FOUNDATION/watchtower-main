@@ -5,7 +5,7 @@ Filters out legitimate high-trust domains to prevent false positives.
 
 import os
 import json
-from typing import Set, List
+from typing import Set
 
 # Path to store the allowlist data
 DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "data")

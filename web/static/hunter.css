@@ -1,0 +1,162 @@
+/* Autonomous hunting views. Reuses the app's colour variables; every colour here encodes the same
+   relevance ramp as the rest of the interface (weak -> low -> medium -> high), nothing decorative. */
+
+.hx-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(128px, 1fr)); gap: 10px; margin: 0 0 18px; }
+.hx-metric { background: var(--surface, #fff); border: 1px solid var(--rule, #C6D1D8); border-radius: var(--radius, 3px); padding: 12px 14px; display: flex; flex-direction: column; gap: 2px; }
+.hx-metric.hx-wide { grid-column: span 2; }
+.hx-num { font: 600 24px var(--mono, monospace); line-height: 1.1; }
+.hx-num small { font-size: 13px; color: var(--muted, #5C6B76); font-weight: 500; }
+.hx-label { font: 500 11px var(--sans, sans-serif); color: var(--muted, #5C6B76); letter-spacing: .02em; }
+
+.hx-filters .controls { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; }
+.hx-filters label { display: flex; flex-direction: column; gap: 4px; font: 600 10px var(--mono, monospace); color: var(--muted, #5C6B76); text-transform: uppercase; letter-spacing: .04em; }
+.hx-filters select, .hx-filters input, .hx-form select, .hx-form input, .hx-form textarea {
+  font: 400 14px var(--sans, sans-serif); padding: 7px 9px; border: 1px solid var(--rule, #C6D1D8); border-radius: var(--radius, 3px);
+  background: var(--surface, #fff); color: var(--ink, #0F1A22); min-height: 36px; }
+
+.hx-table-wrap { overflow-x: auto; border: 1px solid var(--rule, #C6D1D8); border-radius: var(--radius, 3px); background: var(--surface, #fff); }
+.hx-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.hx-table th { text-align: left; font: 600 10px var(--mono, monospace); text-transform: uppercase; letter-spacing: .05em; color: var(--muted, #5C6B76); padding: 8px 10px; border-bottom: 1px solid var(--rule, #C6D1D8); white-space: nowrap; }
+.hx-table td { padding: 8px 10px; border-bottom: 1px solid var(--sunk, #DDE4E8); vertical-align: top; }
+.hx-table tr:last-child td { border-bottom: 0; }
+.hx-num-cell { font-family: var(--mono, monospace); text-align: right; }
+
+.hx-link { background: none; border: 0; padding: 0; font: inherit; color: var(--low, #46748F); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; text-align: left; }
+.hx-link:hover { color: var(--ink, #0F1A22); }
+
+.hx-chip { display: inline-block; font: 600 10px var(--mono, monospace); padding: 2px 7px; border-radius: 999px; border: 1px solid var(--rule, #C6D1D8); color: var(--muted, #5C6B76); background: var(--sunk, #DDE4E8); white-space: nowrap; }
+.hx-HIGH_PRIORITY, .hx-failing, .hx-circuit_open { color: #fff; background: var(--high, #A82C22); border-color: var(--high, #A82C22); }
+.hx-SUSPICIOUS, .hx-rate_limited, .hx-degraded { color: #fff; background: #9A5F0C; border-color: #9A5F0C; }
+.hx-WATCH { color: #fff; background: var(--low, #46748F); border-color: var(--low, #46748F); }
+.hx-healthy, .hx-LOW { color: var(--low, #46748F); background: transparent; border-color: var(--low, #46748F); }
+.hx-UNASSESSED, .hx-unavailable, .hx-disabled, .hx-not_run, .hx-UNSCORED { color: var(--muted, #5C6B76); background: transparent; border-style: dashed; }
+
+.hx-detail { background: var(--surface, #fff); border: 1px solid var(--rule, #C6D1D8); border-left: 4px solid var(--ink, #0F1A22); border-radius: var(--radius, 3px); padding: 18px 20px; margin: 18px 0; }
+.hx-detail section { margin: 18px 0 0; }
+.hx-detail h2, .hx-detail h3, .hx-detail h4 { margin: 0 0 8px; }
+.hx-detail h3 { font: 600 12px var(--mono, monospace); text-transform: uppercase; letter-spacing: .06em; color: var(--muted, #5C6B76); }
+.hx-detail-head { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-start; justify-content: space-between; }
+.hx-score { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+.hx-reasons, .hx-history, .hx-alerts { list-style: none; margin: 0; padding: 0; }
+.hx-reasons li, .hx-history li, .hx-alerts li { padding: 6px 0; border-bottom: 1px solid var(--sunk, #DDE4E8); font-size: 14px; }
+.hx-weight { font-family: var(--mono, monospace); color: var(--high, #A82C22); }
+.hx-neg .hx-weight { color: var(--low, #46748F); }
+.hx-ids { font: 500 11px var(--mono, monospace); color: var(--faint, #8A9AA5); }
+.hx-chain { margin: 0; padding-left: 20px; }
+.hx-chain li { padding: 4px 0; }
+.hx-group h4 { margin: 8px 0 4px; font: 600 11px var(--mono, monospace); color: var(--muted, #5C6B76); }
+.hx-sub { margin-top: 10px; padding: 10px 12px; background: var(--sunk, #DDE4E8); border-radius: var(--radius, 3px); font-size: 13px; }
+.hx-ev { border: 1px solid var(--sunk, #DDE4E8); border-radius: var(--radius, 3px); margin: 6px 0; padding: 6px 10px; }
+.hx-ev summary { cursor: pointer; font-size: 13px; }
+.hx-ev pre { white-space: pre-wrap; word-break: break-word; font: 12px var(--mono, monospace); background: var(--sunk, #DDE4E8); padding: 8px; border-radius: var(--radius, 3px); max-height: 220px; overflow: auto; }
+
+.hx-form { display: grid; gap: 10px; max-width: 560px; margin-top: 10px; }
+.hx-form label { display: flex; flex-direction: column; gap: 4px; font: 600 11px var(--mono, monospace); color: var(--muted, #5C6B76); }
+.hx-form textarea { resize: vertical; }
+.hx-error { color: var(--high, #A82C22); }
+.hx-acked { opacity: .6; }
+
+.hx-card { background: var(--surface, #fff); border: 1px solid var(--rule, #C6D1D8); border-left: 4px solid var(--med, #B5741A); border-radius: var(--radius, 3px); padding: 14px 18px; margin: 0 0 12px; }
+.hx-card header { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.hx-graph { width: 100%; max-width: 680px; height: auto; background: var(--sunk, #DDE4E8); border-radius: var(--radius, 3px); }
+.hx-graph line { stroke: var(--faint, #8A9AA5); stroke-width: 1; }
+.hx-node circle { fill: var(--surface, #fff); stroke: var(--low, #46748F); stroke-width: 2; }
+.hx-node.hx-member circle { fill: var(--high, #A82C22); stroke: var(--ink, #0F1A22); }
+.hx-node text { font: 10px var(--mono, monospace); fill: var(--ink, #0F1A22); }
+
+@media (max-width: 640px) { .hx-metric.hx-wide { grid-column: span 1; } .hx-detail { padding: 14px; } }
+@media (prefers-reduced-motion: reduce) { .hx-detail { scroll-behavior: auto; } }
+
+.hx-section { font: 600 12px var(--mono, monospace); text-transform: uppercase; letter-spacing: .06em; color: var(--muted, #5C6B76); margin: 26px 0 10px; }
+
+/* ---- layout polish --------------------------------------------------------------------------------------------
+   The shared `.controls` rule adds a top rule and 22px margin meant for the scan forms; inside the hunter
+   filter bar that showed up as an empty strip above the fields. Reset it, then lay the fields on a grid so
+   every control shares one height and baseline. */
+#view-hunt, #view-campaigns, #view-huntops { display: block; }
+#view-hunt[hidden], #view-campaigns[hidden], #view-huntops[hidden] { display: none; }
+.hx-metrics { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; margin: 4px 0 20px; }
+.hx-metric { border-radius: 14px; padding: 14px 16px; gap: 4px; box-shadow: var(--shadow-sm, none); min-width: 0; }
+.hx-metric.hx-wide { grid-column: auto; }
+.hx-num { font-size: 26px; letter-spacing: -.01em; }
+.hx-label { text-transform: none; }
+
+.hx-filters { padding: 16px 18px; margin: 0 0 18px; border-radius: 16px; }
+.hx-filters .controls { margin: 0; padding: 0; border: 0; gap: 12px 14px; align-items: end;
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
+.hx-filters label { min-width: 0; }
+.hx-filters select, .hx-filters input { width: 100%; height: 40px; min-height: 40px; box-sizing: border-box; border-radius: 10px; }
+.hx-filters .secondary-button { height: 40px; justify-self: start; padding: 0 18px; }
+
+#hx-feed > .hint { margin: 0 0 8px; }
+.hx-table-wrap { border-radius: 16px; box-shadow: var(--shadow-sm, none); }
+.hx-table { font-size: 13px; }
+.hx-table th { position: sticky; top: 0; background: var(--surface, #fff); padding: 11px 14px; }
+.hx-table td { padding: 11px 14px; vertical-align: middle; }
+.hx-table tbody tr:hover { background: rgba(70, 116, 143, .06); }
+.hx-table td:nth-child(1), .hx-table td:nth-child(5), .hx-table td:nth-child(9) { white-space: nowrap; }
+.hx-table td:nth-child(2) { max-width: 280px; overflow-wrap: anywhere; }
+.hx-chip { padding: 3px 9px; }
+
+.hx-empty { background: var(--surface, #fff); border: 1px dashed var(--rule, #C6D1D8); border-radius: 16px; padding: 36px 24px; text-align: center; }
+.hx-empty h3 { margin: 0 0 6px; font: 600 16px var(--sans, sans-serif); color: var(--ink, #0F1A22); }
+.hx-empty p { margin: 0 auto; max-width: 520px; color: var(--muted, #5C6B76); font-size: 14px; line-height: 1.5; }
+.hx-empty pre { display: inline-block; margin: 14px 0 0; padding: 10px 16px; text-align: left; border-radius: 10px;
+  background: var(--sunk, #DDE4E8); font: 500 13px var(--mono, monospace); }
+
+.hx-detail { border-radius: 16px; padding: 22px 24px; }
+.hx-detail-head h2 { overflow-wrap: anywhere; }
+.hx-card { border-radius: 14px; }
+.hx-ev pre { max-width: 100%; }
+@media (max-width: 640px) {
+  .hx-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .hx-filters .controls { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .hx-detail { padding: 16px; }
+}
+@media (min-width: 1100px) {
+  .hx-metrics { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+  .hx-filters .controls { grid-template-columns: repeat(6, minmax(0, 1fr)) auto; }
+}
+
+/* ---- data-dense dashboard pass --------------------------------------------------------------------------------
+   Hierarchy: a KPI is quiet unless it needs attention; the risk column shows magnitude at a glance; every
+   interactive element has a visible focus ring and a pointer; touch targets reach 44px on small screens. */
+.hx-metric { border-top: 3px solid transparent; transition: border-color .15s, box-shadow .15s; }
+.hx-tone-high { border-top-color: var(--high, #A82C22); } .hx-tone-high .hx-num { color: var(--high, #A82C22); }
+.hx-tone-med  { border-top-color: #9A5F0C; }              .hx-tone-med .hx-num  { color: #9A5F0C; }
+.hx-tone-low  { border-top-color: var(--low, #46748F); }
+.hx-num { font-variant-numeric: tabular-nums; }
+
+.hx-risk { white-space: nowrap; min-width: 96px; }
+.hx-risk b { font: 600 13px var(--mono, monospace); font-variant-numeric: tabular-nums; display: inline-block; min-width: 2.2ch; text-align: right; margin-left: 8px; }
+.hx-bar { display: inline-block; vertical-align: middle; width: 44px; height: 6px; border-radius: 999px; background: var(--sunk, #DDE4E8); overflow: hidden; }
+.hx-bar i { display: block; height: 100%; background: var(--low, #46748F); border-radius: inherit; }
+.hx-table tr:has(.hx-HIGH_PRIORITY) .hx-bar i { background: var(--high, #A82C22); }
+.hx-table tr:has(.hx-SUSPICIOUS) .hx-bar i { background: #9A5F0C; }
+.hx-table td:nth-child(2) .hx-link { font-family: var(--mono, monospace); font-size: 12.5px; }
+.hx-table tbody tr:has(.hx-HIGH_PRIORITY) { box-shadow: inset 3px 0 0 var(--high, #A82C22); }
+
+.hx-link, .hx-filters select, .hx-filters input, .hx-filters .secondary-button, .hx-form button { cursor: pointer; }
+.hx-filters input { cursor: text; }
+.hx-link:focus-visible, .hx-filters select:focus-visible, .hx-filters input:focus-visible,
+.hx-filters .secondary-button:focus-visible, .hx-ev summary:focus-visible, .hx-form :focus-visible {
+  outline: 2px solid var(--low, #46748F); outline-offset: 2px; }
+/* The page headers take programmatic focus on navigation; they are not controls, so no ring. */
+#view-hunt .view-head:focus, #view-campaigns .view-head:focus, #view-huntops .view-head:focus { outline: none; }
+
+#view-hunt .view-head, #view-campaigns .view-head, #view-huntops .view-head { margin-bottom: 14px; }
+#view-hunt .view-head h1, #view-campaigns .view-head h1, #view-huntops .view-head h1 { font-size: 22px; letter-spacing: -.01em; }
+.hx-table-wrap { max-height: 70vh; overflow: auto; }
+.hx-section { margin: 28px 0 10px; }
+
+@media (max-width: 640px) {
+  .hx-filters select, .hx-filters input, .hx-filters .secondary-button { height: 44px; min-height: 44px; }
+  .hx-link { min-height: 44px; display: inline-flex; align-items: center; }
+  .hx-table td { padding: 6px 12px; }
+}
+@media (prefers-reduced-motion: reduce) { .hx-metric { transition: none; } }
+
+/* A wide table inside a grid/flex parent sets the parent's min-content width, which pushed the whole page
+   sideways on phones. Let the content column shrink; the table scrolls inside its own wrapper. */
+main, #view-hunt, #view-campaigns, #view-huntops, .hx-table-wrap { min-width: 0; max-width: 100%; }
+.view-head p, .hx-detail, .hx-card { overflow-wrap: anywhere; }

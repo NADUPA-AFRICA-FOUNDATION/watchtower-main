@@ -26,6 +26,10 @@ EntityType = Literal[
     "hosting_provider",
     "company",
     "app",
+    "whatsapp",
+    "telegram",
+    "crypto_wallet",
+    "campaign",
 ]
 
 

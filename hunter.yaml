@@ -1,0 +1,150 @@
+# Autonomous hunter configuration. Separate from config.yaml (watchtower) and
+# config.json (scamscan) on purpose: no shared config between engines.
+#
+# Unknown keys are an error, not ignored, so a typo in a weight name cannot
+# silently leave the default in force.
+
+brands:
+  - name: M-PESA
+    aliases: [mpesa, m-pesa]
+    # Related brands still count, at a lower weight than the primary brand.
+    related_brands: [safaricom, fuliza, m-shwari]
+    # Administrators maintain this list. Anything on or under these domains is
+    # treated as official and is never investigated as a candidate.
+    official_domains: [safaricom.co.ke, m-pesa.co.ke, vodacom.co.tz]
+    # Real, unrelated institutions. A domain naming one of these and no M-PESA
+    # token is not an impersonation lead.
+    excluded_brands: [equity bank, co-op bank, ncba, stanbic, absa, kcb bank]
+    markets: [Kenya, Tanzania, Lesotho]
+
+prescore:
+  bands: {store_max: 30, light_max: 55, full_max: 75}
+  # Override any default weight here, e.g. brand_token: 35
+  weights: {}
+
+permutations:
+  enabled: true
+  max_candidates: 400        # per brand per run, after ranking
+  max_labels: 3000           # label variants generated before TLDs are crossed
+  max_tlds_per_label: 6
+  tlds: [com, co.ke, net, org, online, xyz, info, site, top, app, live, click]
+
+certificate_transparency:
+  enabled: true
+  min_interval_seconds: 2.0
+  max_rows_per_term: 300
+  max_names_per_certificate: 50
+  timeout_seconds: 30
+
+budgets:
+  max_candidates_per_run: 500
+
+enrichment:
+  dns_timeout_seconds: 5
+  rdap_min_interval_seconds: 1.0
+  rdap_cache_hours: 24
+  tls_timeout_seconds: 7
+  concurrency: 5
+  max_deep_per_hour: 30
+  max_batch_seconds: 600
+  # Re-check schedule (days) for names that do not resolve yet. Generated
+  # permutations mostly are not registered; they are re-checked slowly, then
+  # IGNORED (visible, re-queueable), never dropped.
+  unregistered_recheck_days: [1, 3, 7, 14, 30]
+
+acquisition:
+  # Landing page = targeted inspection; robots.txt is recorded but not obeyed.
+  # Pages beyond it are crawling and always obey robots.txt.
+  obey_robots_landing: false
+  max_pages_per_domain: 3
+  max_bytes: 1500000
+  timeout_seconds: 10
+  total_timeout_seconds: 25
+  page_delay_seconds: 1.0
+
+signals:
+  default_region: KE
+  # Literal phrases only (matched case-insensitively, any punctuation/spacing between words).
+  # A name that matches a built-in rule extends it; a new name creates a rule.
+  phrases: {}
+  #   verify_account: ["confirm your identity"]
+  #   kyc_update: ["update your kyc"]
+  disable: []
+  infrastructure_domains: []
+
+scoring:
+  # Deterministic and explainable: every point carries a reason and the evidence it came from.
+  # Weights are editable here; nothing adjusts them automatically. Unknown names, or a sign that
+  # is the wrong way round (a discount that adds risk), are errors.
+  bands: {watch_min: 31, suspicious_min: 56, high_min: 76}
+  weights: {}
+  recently_registered_days: 30
+  established_years: 5
+  unbranded_cap: 40
+  # Administrators add trusted classifications here (news, government, universities, security vendors).
+  trusted_domains: []
+  trusted_suffixes: [.go.ke, .gov, .ac.ke, .edu]
+  escalate_at: HIGH_PRIORITY
+
+pivots:
+  # Recursive hunting is bounded on every axis; nothing here can run away.
+  max_depth: 3
+  max_pivots_per_entity: 10
+  max_jobs_per_lineage: 50
+  max_pivots_per_day: 200
+  max_search_queries_per_day: 100
+  search_min_interval_seconds: 2.0
+  queue_medium: true
+  queue_low: false
+  deep_if_ancestor_score: 56
+  reverse_ip: false
+  shared_ip_max_domains: 50
+  search: true
+
+correlation:
+  # A pair of domains joins a campaign through one strong link (shared phone/WhatsApp/Telegram/payment
+  # id/crypto wallet/analytics id/email/form endpoint/page template) or two independent medium links
+  # (shared IP/nameserver/certificate/redirect target). Weak links (registrar, CDN, a linked-to
+  # site) are shown as detail and never merge anything.
+  strong_weight: 0.8
+  medium_weight: 0.35
+  weak_weight: 0.05
+  uncommon_max_domains: 5
+  generic_node_max_domains: 20
+  min_pair_confidence: 0.5
+  medium_links_needed: 2
+  campaign_alert_growth: 3
+
+scheduler:
+  ct_minutes: 30
+  permutation_hours: 24
+  search_discovery_hours: 6
+  enrich_seconds: 60
+  enrich_limit: 20
+  refresh_minutes: 60
+  alerts_seconds: 60
+  purge_hours: 24
+  breaker_failures: 5
+  breaker_cooldown_minutes: 30
+  refresh_days: {HIGH_PRIORITY: 1, SUSPICIOUS: 2, WATCH: 7, LOW: 30, UNASSESSED: 7}
+
+alerts:
+  # Only: a new HIGH_PRIORITY entity, a campaign that grows materially, known-bad infrastructure
+  # reappearing, a large risk increase, an important provider failing repeatedly. Each alert key is
+  # raised once per cooldown. Outbound delivery needs the webhook env var below; unset = local only.
+  enabled: true
+  cooldown_hours: 24
+  risk_delta: 25
+  provider_failures: 3
+
+retention:
+  # Page text, contact identifiers and rejected input are personal data (Kenya DPA 2019): a stated
+  # purpose and a retention limit. Confirm lawful basis before running against live traffic.
+  personal_data_days: 90
+  keep_campaign_indicators: true
+  rejection_days: 30
+
+search_discovery:
+  enabled: true
+  max_queries_per_run: 6
+  max_results_per_query: 10

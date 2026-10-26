@@ -9,8 +9,10 @@
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='7' fill='%23A82C22'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Fira+Code:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Fira+Code:wght@400;500;600&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
+<noscript><link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Fira+Code:wght@400;500;600&display=swap" rel="stylesheet"></noscript>
 <link rel="stylesheet" href="/style.css">
+<link rel="stylesheet" href="/hunter.css">
 </head>
 <body>
 
@@ -27,6 +29,7 @@
     <div class="mode-switch" role="tablist" aria-label="Mnara work mode">
       <button type="button" class="mode-tab is-on" data-mode="monitor" role="tab" aria-selected="true">Monitor</button>
       <button type="button" class="mode-tab" data-mode="investigate" role="tab" aria-selected="false">Investigate</button>
+      <button type="button" class="mode-tab" data-mode="hunt" role="tab" aria-selected="false">Hunt</button>
     </div>
     <div class="side-group" data-side="watchtower">
       <span class="side-label">Monitor workspace</span>
@@ -38,6 +41,12 @@
       <button class="tab" data-view="discover" data-side="scamscan"><svg viewBox="0 0 24 24" fill="none"><path d="M4 19V9m5 10V5m5 14v-7m5 7V3"/></svg><span>Find scam sites</span></button>
       <button class="tab" data-view="queue" data-side="scamscan"><svg viewBox="0 0 24 24" fill="none"><path d="M4 5h16v14H4z"/><path d="M8 9h8M8 13h5"/></svg><span>Review queue</span></button>
       <button class="tab" data-view="score" data-side="scamscan"><svg viewBox="0 0 24 24" fill="none"><path d="M12 3v18M3 12h18"/><circle cx="12" cy="12" r="8"/></svg><span>Quick score</span></button>
+    </div>
+    <div class="side-group" data-side="hunter">
+      <span class="side-label">Autonomous hunting</span>
+      <button class="tab" data-view="hunt" data-side="hunter"><svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg><span>Hunting feed</span></button>
+      <button class="tab" data-view="campaigns" data-side="hunter"><svg viewBox="0 0 24 24" fill="none"><circle cx="6" cy="7" r="2.5"/><circle cx="18" cy="7" r="2.5"/><circle cx="12" cy="18" r="2.5"/><path d="M8 8l3 8M16 8l-3 8M8.5 7h7"/></svg><span>Campaigns</span></button>
+      <button class="tab" data-view="huntops" data-side="hunter"><svg viewBox="0 0 24 24" fill="none"><path d="M4 6h16M4 12h16M4 18h10"/><circle cx="19" cy="18" r="2"/></svg><span>Operations</span></button>
     </div>
   </nav>
   <div class="rail-foot"><span class="status-dot" aria-hidden="true"></span><span class="rail-status" id="ai-status" title="Relevance scoring status">Checking system</span></div>
@@ -326,6 +335,54 @@
   <div class="findings" id="queue-results"></div>
 </section>
 
+<!-- ============================ HUNT ============================ -->
+<section id="view-hunt" hidden>
+  <header class="view-head compact-head" tabindex="-1"><div>
+    <span class="eyebrow">Mnara / Autonomous hunting</span>
+    <h1>Autonomous hunting</h1>
+    <p>Mnara finds candidate infrastructure on its own, explains every score, and connects related sites. Start it with <code>python run.py hunt</code>.</p>
+  </div></header>
+  <p class="hint warn-note hx-error" id="hx-warn" hidden></p>
+  <section class="hx-metrics" id="hx-metrics" aria-label="Activity in the last 24 hours"></section>
+  <form class="console hx-filters" id="hx-filters" autocomplete="off">
+    <div class="controls">
+      <label>Class<select name="classification"><option value="">all</option><option value="HIGH_PRIORITY">high priority</option><option value="SUSPICIOUS">suspicious</option><option value="WATCH">watch</option><option value="LOW">low</option><option value="UNASSESSED">not assessed</option></select></label>
+      <label>Status<select name="status"><option value="">all</option><option value="ESCALATED">escalated</option><option value="SCORED">scored</option><option value="QUEUED">queued</option><option value="INVESTIGATING">running</option><option value="RETRY">retrying</option><option value="FAILED">failed</option><option value="IGNORED">ignored</option><option value="NEW">stored only</option></select></label>
+      <label>Review<select name="disposition"><option value="">all</option><option value="UNREVIEWED">unreviewed</option><option value="SUSPICIOUS">suspicious</option><option value="CONFIRMED_SCAM">confirmed scam</option><option value="CONFIRMED_IMPERSONATION">confirmed impersonation</option><option value="MONITOR">monitor</option><option value="FALSE_POSITIVE">false positive</option><option value="BENIGN">benign</option></select></label>
+      <label>Type<select name="type"><option value="">all</option><option value="domain">domains</option><option value="whatsapp">WhatsApp</option><option value="phone_number">phone numbers</option><option value="telegram">Telegram</option><option value="payment_identifier">payment ids</option><option value="email">emails</option><option value="crypto_wallet">wallets</option></select></label>
+      <label>Min risk<input name="min_score" type="number" min="0" max="100" inputmode="numeric"></label>
+      <label>Search<input name="q" type="search" maxlength="100" placeholder="domain or id"></label>
+      <button type="button" class="secondary-button" id="hx-refresh">Refresh</button>
+    </div>
+  </form>
+  <div id="hx-feed" aria-live="polite"></div>
+  <article class="hx-detail" id="hx-detail" hidden aria-label="Investigation"></article>
+</section>
+
+<!-- ============================ CAMPAIGNS ============================ -->
+<section id="view-campaigns" hidden>
+  <header class="view-head compact-head" tabindex="-1"><div>
+    <span class="eyebrow">Mnara / Campaigns</span>
+    <h1>Possible campaigns</h1>
+    <p>Sites that share a strong link are grouped here, with the reason shown. Sharing a CDN, host or registrar is never enough on its own.</p>
+  </div></header>
+  <div id="hx-campaigns"></div>
+  <article class="hx-detail" id="hx-campaign-detail" hidden aria-label="Campaign"></article>
+</section>
+
+<!-- ============================ OPERATIONS ============================ -->
+<section id="view-huntops" hidden>
+  <header class="view-head compact-head" tabindex="-1"><div>
+    <span class="eyebrow">Mnara / Operations</span>
+    <h1>Queue, sources and alerts</h1>
+    <p>What the hunter is working on, which sources are healthy, and the few alerts worth a person's attention.</p>
+  </div></header>
+  <h2 class="hx-section">Queue</h2><div id="hx-queue"></div>
+  <h2 class="hx-section">Source coverage</h2><div id="hx-sources"></div>
+  <h2 class="hx-section">Alerts</h2><div id="hx-alerts"></div>
+  <h2 class="hx-section">What analyst decisions suggest</h2><div id="hx-insights"></div>
+</section>
+
 <!-- ============================ SCORE ============================ -->
 <section id="view-score" hidden>
   <header class="view-head compact-head" tabindex="-1"><div>
@@ -372,5 +429,6 @@
 </dialog>
 
 <script src="/app.js"></script>
+<script src="/hunter.js"></script>
 </body>
 </html>

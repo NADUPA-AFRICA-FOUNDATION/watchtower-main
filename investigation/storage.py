@@ -32,6 +32,10 @@ VERDICTS = {
     "false_positive",
     "duplicate",
     "monitor",
+    # hunter dispositions (HUNTER_PLAN.md, Milestone 11)
+    "confirmed_scam",
+    "confirmed_impersonation",
+    "unreviewed",
 }
 
 

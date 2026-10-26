@@ -40,13 +40,30 @@ class SafeFetchResult:
         return self.body.decode("utf-8", errors="replace")
 
 
-def _public_ip(value: str) -> bool:
+# Ranges Python does not call "not global" but that must never be contacted. 100.64.0.0/10 is carrier-grade
+# NAT and contains Alibaba Cloud's metadata service (100.100.100.200); 6to4 and Teredo embed an arbitrary
+# IPv4 address (so 2002:a00:1::1 reaches 10.0.0.1 through a relay); the rest are special-purpose blocks.
+_NEVER_FETCH = tuple(ipaddress.ip_network(n) for n in (
+    "100.64.0.0/10", "192.0.0.0/24", "192.88.99.0/24", "198.18.0.0/15",
+    "2002::/16", "2001::/32", "64:ff9b::/96", "64:ff9b:1::/48", "100::/64", "fec0::/10",
+))
+
+
+def is_public_ip(value: str) -> bool:
+    """True only for an address that is globally routable and not in a range that tunnels to a private one."""
     try:
         address = ipaddress.ip_address(value.split("%", 1)[0])
     except ValueError:
         return False
-    return not any((address.is_private, address.is_loopback, address.is_link_local,
-                    address.is_reserved, address.is_multicast, address.is_unspecified))
+    if getattr(address, "ipv4_mapped", None) is not None:
+        return False                      # ::ffff:a.b.c.d is refused outright rather than unwrapped
+    if any((address.is_private, address.is_loopback, address.is_link_local, address.is_reserved,
+            address.is_multicast, address.is_unspecified, not address.is_global)):
+        return False
+    return not any(address in net for net in _NEVER_FETCH)
+
+
+_public_ip = is_public_ip                 # the old private name, kept for existing callers
 
 
 async def resolve_public(host: str) -> list[str]:
@@ -141,7 +158,9 @@ class SafeFetcher:
         user_agent: str = "Watchtower/1.0 evidence collector",
         cache=None,
         cache_ttl: int = 21600,
+        keep_headers: frozenset = frozenset({"content-type", "server", "location", "via"}),
     ):
+        self.keep_headers = keep_headers
         self._owns_client = client is None
         self._pinned_transport = _PinnedTransport() if client is None else None
         self.client = client or httpx.AsyncClient(
@@ -211,7 +230,7 @@ class SafeFetcher:
                                                    redirect_chain=chain,
                                                    error="response exceeds size limit")
                     headers = {k.lower(): v for k, v in response.headers.items()
-                               if k.lower() in {"content-type", "server", "location", "via"}}
+                               if k.lower() in self.keep_headers}
                     result = SafeFetchResult(requested, url, response.status_code, ctype,
                                              bytes(body), chain, headers)
                     if self.cache:

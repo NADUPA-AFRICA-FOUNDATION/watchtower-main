@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import sqlite3
 from pathlib import Path
-from typing import Iterable, Iterator
+from typing import Iterable
 
 from .models import Item
 

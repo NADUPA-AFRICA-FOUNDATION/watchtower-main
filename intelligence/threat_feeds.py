@@ -20,7 +20,7 @@ import json
 import logging
 import time
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any
 from urllib.parse import urlparse
 from urllib.request import urlopen, Request
 import ssl

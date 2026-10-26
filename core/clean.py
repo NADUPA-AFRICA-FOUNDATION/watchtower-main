@@ -7,12 +7,20 @@ touches the model: it typically cuts token count by well over half.
 
 from __future__ import annotations
 
-import trafilatura
-from trafilatura.settings import use_config
+_CONFIG = None
 
-# Silence trafilatura's signal-based timeout, which breaks in threads.
-_CONFIG = use_config()
-_CONFIG.set("DEFAULT", "EXTRACTION_TIMEOUT", "0")
+
+def _load():
+    """trafilatura (with lxml) is ~150ms to import and only article extraction needs it, so it loads on
+    first use rather than at server start."""
+    global _CONFIG
+    import trafilatura
+    if _CONFIG is None:
+        from trafilatura.settings import use_config
+        # Silence trafilatura's signal-based timeout, which breaks in threads.
+        _CONFIG = use_config()
+        _CONFIG.set("DEFAULT", "EXTRACTION_TIMEOUT", "0")
+    return trafilatura
 
 
 def extract(html: str, url: str = "") -> dict[str, str]:
@@ -21,6 +29,7 @@ def extract(html: str, url: str = "") -> dict[str, str]:
     if not html:
         return blank
 
+    trafilatura = _load()
     meta = trafilatura.extract_metadata(html, default_url=url)
     text = trafilatura.extract(
         html,
