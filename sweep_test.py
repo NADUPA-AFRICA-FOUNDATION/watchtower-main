@@ -162,6 +162,18 @@ def check(label, cond):
 
 def main():
     ok = True
+    # fetch.py's retry backoff is real (5s then 10s on a 429) and several checks below drive a 429 on
+    # purpose. Give the fetch module its own `time` so those waits cost nothing; the one check that
+    # asserts what the wait *is* captures it explicitly, and the sweep-budget check below keeps the
+    # real clock because it patches nothing here.
+    import types as _types
+    import core.fetch as _fm
+    # social_web_index is a default backend but searches DuckDuckGo through its own client, which
+    # httpx.MockTransport cannot intercept. Left alone, every default sweep here goes to the real
+    # network and waits on real pacing. Its behaviour is covered offline in tests/test_socialcrawl.py.
+    import core.sources as _src
+    _src.BACKENDS["social_web_index"] = lambda query, fetcher, hours=72, limit=20: []
+    _fm.time = _types.SimpleNamespace(sleep=lambda seconds: None, monotonic=time.monotonic, time=time.time)
     fetcher = Fetcher("watchtower-test/0.1 (test@example.com)", delay=0.0,
                       transport=httpx.MockTransport(handler))
 
@@ -342,7 +354,7 @@ def main():
     try:
         got = tf.get("https://api.gdeltproject.org/api/v2/doc/doc?x=1", api=True)
     finally:
-        _fetchmod.time.sleep = real_sleep
+        _fetchmod.time.sleep = lambda seconds: None
     ok &= check("a throttled source is retried, not written off", got.ok)
     ok &= check("the first 429 waits at least as long as the host asked",
                 waits and waits[0] >= RATE_LIMIT_FLOOR)
@@ -402,7 +414,7 @@ def main():
     slow_backends = dict(SW.BACKENDS)
 
     def crawler(query, fetcher, hours=72, limit=40):
-        time.sleep(5.0)
+        time.sleep(2.0)
         return [Item(url="https://slow.example/1", source="slow",
                      source_type="news", title="too late")]
 
@@ -414,9 +426,9 @@ def main():
     try:
         t0 = time.monotonic()
         budgeted = sweep(QUERY, fetcher, backends=["quick", "slow"],
-                         fetch_bodies=False, budget=1.0)
+                         fetch_bodies=False, budget=0.5)
         elapsed = time.monotonic() - t0
-        ok &= check("a sweep returns within its budget", elapsed < 4.0)
+        ok &= check("a sweep returns within its budget", elapsed < 1.5)
         ok &= check("the source that ran is kept",
                     budgeted.per_source.get("quick") == 1)
         ok &= check("the source that ran out of time is marked unsearched",

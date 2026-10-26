@@ -32,7 +32,11 @@ from __future__ import annotations
 import base64
 import json
 import os
+import logging
+import queue
 import re
+import threading
+import time
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote_plus, urlencode, urlsplit, urlunsplit
 
@@ -230,6 +234,119 @@ def mastodon(query: str, fetcher: Fetcher, hours: int = 72,
 
 # ------------------------------------------------------ Free social index
 
+SOCIAL_SITES = ("tiktok.com", "facebook.com", "instagram.com", "t.me",
+                "x.com", "youtube.com", "wa.me")
+# Seconds between index requests per worker. The index rate-limits bursts, and a
+# throttled request looks exactly like an empty one, so we pace instead of racing.
+SOCIAL_PACE = 0.5
+# Hard ceiling for the whole backend. A DuckDuckGo request can hang past its own
+# timeout; without this one stuck socket stalls the sweep forever.
+SOCIAL_DEADLINE = 75.0
+
+
+def _is_official_handle(path: str) -> bool:
+    parts = [p for p in path.split("/") if p]
+    from core.fraud_lexicon import OFFICIAL_HANDLES
+    return bool(parts) and parts[0].lstrip("@").lower() in OFFICIAL_HANDLES
+
+
+def _social_kind(host: str, path: str) -> tuple[str, str]:
+    """(kind, account) for an indexed URL. Kind lets a reviewer skip platform-made
+    topic pages (/discover/, /tag/) that the index returns but nobody posted."""
+    parts = [p for p in path.split("/") if p]
+    first = parts[0] if parts else ""
+    if first in {"discover", "popular", "explore", "tag", "hashtag", "topic"}:
+        return "topic_page", ""
+    if host == "t.me":
+        if first == "s" and len(parts) > 1:
+            first = parts[1]
+        if first.startswith("+") or first == "joinchat":
+            return "invite_link", ""
+        return "channel", first
+    if host == "wa.me":
+        return "contact", first
+    if first.startswith("@"):
+        return ("post" if len(parts) > 1 else "profile"), first.lstrip("@")
+    if host in {"x.com", "instagram.com"} and first and first not in {"p", "reel", "tv", "i", "search"}:
+        return ("post" if len(parts) > 1 else "profile"), first
+    return "post", ""
+
+
+_PLATFORM_CHROME = {"help", "docs", "developer", "developers", "business", "support", "about",
+                    "transparency", "blog", "newsroom", "ads"}
+_URL_IN_TEXT = re.compile(r"(?:https?://|www\.)[^\s<>\"')\]]+", re.I)
+
+
+def _linked_urls(*texts: str) -> list[str]:
+    """Off-platform links quoted in a title/snippet. A scam post's link is the pivot
+    (the FulizaBoost page lived on vercel.app), so it is surfaced rather than buried."""
+    found = []
+    for t in texts:
+        for m in _URL_IN_TEXT.findall(t or ""):
+            u = m.rstrip(".,;:!?…")
+            if not u.lower().startswith("http"):
+                u = "https://" + u
+            host = (urlsplit(u).hostname or "").lower()
+            if host and not any(host == s_ or host.endswith("." + s_) for s_ in SOCIAL_SITES) and u not in found:
+                found.append(u)
+    return found[:5]
+
+
+# Bait vocabulary: core/fraud_lexicon.py (1,000+ phrases in 19 families, EN/SW/Sheng) plus a few
+# regex shapes a phrase list cannot express (numeric windows, throwaway-host domains). The shapes
+# are mapped onto the lexicon's family names so "guaranteed" from either source is ONE signal:
+# counting synonyms separately would let a single claim reach the two-signal threshold alone.
+# Provenance is COMMON_PATTERN, not this repo's confirmed cases: a hit is a prompt to look, never
+# a verdict. Advisories quote the bait verbatim, so any advisory marker suppresses the whole set
+# (same reasoning as scamscan's counter_terms).
+_BAIT_SHAPES = {
+    "guarantee_claims": r"\b(?:guarantee[ds]?|100\s*%\s*(?:working|sure|legit))\b",
+    "contact_funnel": r"\b(?:hit|dm|inbox|message|whatsapp)\s+(?:the\s+|our\s+|my\s+)?(?:admin|agent)\b",
+    "advance_fee": r"\b(?:pre-?pay|upfront|ready with the charges)\b",
+    "urgency_pressure": r"\b(?:slots?\s+(?:almost|are)\s+full|hurry|limited\s+(?:slots|time)|apply\s+now"
+                        r"|within\s+\d+\s*(?:-\s*\d+\s*)?min(?:ute)?s?|1\s*[\u2013-]\s*2\s*minutes)\b",
+    "link_hosting": r"\b[\w-]+\.(?:vercel\.app|netlify\.app|pages\.dev|blogspot\.com|weebly\.com|wixsite\.com)\b",
+}
+_ADVISORY = re.compile(r"\b(?:scam(?:s|mers?)?|fake|fraud(?:ulent|sters?)?|hoax|beware|warning|fact[- ]?check|"
+                       r"don'?t (?:be )?(?:conned|fall)|safaricom (?:warns|says|clarif)|"
+                       r"tahadhari|ulaghai|matapeli|walaghai)", re.I)
+_BAIT_SHAPE_RE = {k: re.compile(v, re.I) for k, v in _BAIT_SHAPES.items()}
+
+
+def _bait_signals(*texts: str) -> tuple[list[str], bool]:
+    """(signals, advisory). Signals are empty for an advisory, which only quotes the bait."""
+    signals, _terms, advisory = _bait_analysis(*texts)
+    return signals, advisory
+
+
+def _bait_analysis(*texts: str) -> tuple[list[str], dict[str, list[str]], bool]:
+    """(families hit, phrases per family, advisory). The phrases are kept so a score can be defended."""
+    from core.fraud_lexicon import match
+    blob = " ".join(t for t in texts if t)
+    if _ADVISORY.search(blob):
+        return [], {}, True
+    terms = match(blob)
+    for family, rx in _BAIT_SHAPE_RE.items():
+        hit = [m.group(0).lower() for m in rx.finditer(blob)]
+        if hit:
+            terms[family] = sorted(set(terms.get(family, [])) | set(hit))
+    return sorted(terms), terms, False
+
+
+def _social_url(parsed) -> str:
+    """Canonical form so one account/post is one row. t.me/s/<name> is the public
+    preview of t.me/<name>; ?before=N pages through the same channel."""
+    host = parsed.netloc.lower()
+    path, query = parsed.path, parsed.query
+    if host == "t.me":
+        parts = [p for p in path.split("/") if p]
+        if len(parts) >= 2 and parts[0] == "s":
+            path = "/" + "/".join(parts[1:])
+        if len(parts) <= 2:
+            query = ""
+    return urlunsplit((parsed.scheme, host, path, query, ""))
+
+
 def social_web_index(query: str, fetcher: Fetcher, hours: int = 72,
                      limit: int = 20) -> list[Item]:
     """Find public social URLs through an unauthenticated web index.
@@ -238,6 +355,18 @@ def social_web_index(query: str, fetcher: Fetcher, hours: int = 72,
     platform login or robots policy and is intentionally labelled as indexed
     leads. It is free, broad (TikTok, Instagram, Facebook, Telegram, WhatsApp,
     X and YouTube), and useful when platform APIs are unavailable.
+
+    One request per platform and phrasing, not one giant OR. A single
+    ``(site:a OR site:b ...)`` query comes back empty for most real topics
+    (it returned nothing for "Fuliza limit increase" while per-site queries
+    found Telegram "increment" channels and TikTok boost accounts), and an
+    empty answer here reads as "nothing exists". Results are interleaved by
+    platform so one chatty site cannot fill the page, and a failed request is
+    never counted as a zero: every item carries ``requests_failed``, and no
+    items with any failure raises.
+
+    ``hours`` is ignored: the index has no date filter. Said here because the
+    other backends honour it and a reader would assume this one does too.
     """
     import osint_discovery
 
@@ -245,56 +374,142 @@ def social_web_index(query: str, fetcher: Fetcher, hours: int = 72,
     if len(clean_query) < 2:
         raise SourceError("social index query must contain at least 2 characters")
 
-    # Keep the exact phrase for precision, but include the unquoted form too:
-    # a newly-created impersonation account rarely repeats a long investigation
-    # phrase verbatim. One request preserves the latency/coverage budget while
-    # the OR makes the free fallback useful for names plus indicators.
-    sites = ("tiktok.com", "instagram.com", "facebook.com", "t.me",
-             "wa.me", "x.com", "youtube.com")
-    indexed_query = (f'("{clean_query}" OR {clean_query}) ('
-                     + " OR ".join(f"site:{site}" for site in sites) + ")")
     bounded_limit = max(1, min(int(limit), 30))
-    try:
-        rows = osint_discovery.search_duckduckgo(indexed_query,
-                                                 max_results=bounded_limit)
-    except Exception as exc:
-        raise SourceError(f"free social index search failed: {exc}") from exc
+    sites = SOCIAL_SITES
+    # Exact phrase for precision; loose form because a throwaway scam account
+    # rarely repeats an investigator's phrase verbatim. The loose form only runs
+    # where the exact one came back thin: it halves the requests on a busy topic.
+    multiword = " " in clean_query
 
-    out, seen = [], set()
-    for row in rows or []:
-        if not isinstance(row, dict):
-            continue
-        raw_url = str(row.get("url") or "").strip()
-        parsed = urlsplit(raw_url)
-        host = parsed.hostname.lower() if parsed.hostname else ""
-        if not any(host == site or host.endswith("." + site) for site in sites):
-            continue
-        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-            continue
-        # Fragments and tracking parameters do not identify a different public
-        # post. Keep query parameters (some platform links need them), but make
-        # deduplication stable across http redirects and URL fragments.
-        normalized_host = host.removeprefix("www.")
-        identity = (normalized_host, parsed.path.rstrip("/") or "/",
-                    parsed.query)
-        if identity in seen:
-            continue
-        seen.add(identity)
-        url = urlunsplit((parsed.scheme, parsed.netloc.lower(), parsed.path,
-                         parsed.query, ""))
-        platform = next((site for site in sites
-                         if host == site or host.endswith("." + site)), "social")
-        out.append(Item(
-            url=url,
-            source="social_web_index",
-            source_type="social",
-            title=_strip_tags(str(row.get("title") or ""))[:200],
-            text=_strip_tags(str(row.get("summary") or ""))[:2000],
-            raw_meta={"platform": platform, "indexed": True,
-                      "discovery_method": "duckduckgo_web_index",
-                      "indexed_query": indexed_query},
-        ))
-    return out[:bounded_limit]
+    def one(site, q):
+        last = None
+        for attempt in range(2):
+            time.sleep(SOCIAL_PACE * (1 + attempt))
+            try:
+                return site, q, osint_discovery.search_duckduckgo(q, max_results=10), None
+            except Exception as exc:                       # noqa: BLE001 - reported, not hidden
+                last = exc
+        return site, q, [], last
+
+    def run(site):
+        out_ = [one(site, f'"{clean_query}" site:{site}')]
+        if multiword and len(out_[0][2]) < 4:
+            out_.append(one(site, f"{clean_query} site:{site}"))
+        return out_
+
+    jobs = list(sites)
+
+    # Daemon threads, not ThreadPoolExecutor: its workers are joined at interpreter
+    # exit, so one request stuck in a socket kept the whole process alive after the
+    # sweep had printed its report. A daemon thread can simply be abandoned.
+    pending_jobs = queue.Queue()
+    for job in jobs:
+        pending_jobs.put(job)
+    finished: list = []
+    lock = threading.Lock()
+    stop = threading.Event()
+
+    def worker():
+        # `stop` is set at the deadline so an abandoned worker does not keep working
+        # through the queue (and hitting the index) after the sweep has moved on.
+        while not stop.is_set():
+            try:
+                job = pending_jobs.get_nowait()
+            except queue.Empty:
+                return
+            res = run(job)
+            with lock:
+                finished.extend(res)
+
+    # One worker on purpose. ddgs builds a primp client per request and primp logs
+    # through Python's logging from Rust; with three threads doing that at once the
+    # process deadlocked (stack dump: all three inside http_client.__init__ /
+    # logging.emit). Pacing already dominates the latency, so parallelism bought little.
+    logging.getLogger("primp").setLevel(logging.ERROR)
+    thread = threading.Thread(target=worker, daemon=True)
+    thread.start()
+    thread.join(SOCIAL_DEADLINE)
+    stop.set()
+    with lock:
+        results = list(finished)
+    answered = {site for site, _, _, _ in results}
+    # Queued-but-never-run platforms and stuck ones are both "could not look", not zeros.
+    results += [(site, f'"{clean_query}" site:{site}', [], TimeoutError(f"no answer within {SOCIAL_DEADLINE:.0f}s"))
+                for site in jobs if site not in answered]
+
+    failures = [(q, exc) for _, q, _, exc in results if exc is not None]
+    if len(failures) == len(results):
+        raise SourceError(f"free social index search failed: {failures[0][1]}") from failures[0][1]
+
+    tokens = [t for t in re.findall(r"[a-z0-9]+", clean_query.lower()) if len(t) >= 4]
+    by_site: dict[str, list[Item]] = {site: [] for site in sites}
+    seen = set()
+    for _, q, rows, _exc in results:
+        for row in rows or []:
+            if not isinstance(row, dict):
+                continue
+            parsed = urlsplit(str(row.get("url") or "").strip())
+            host = (parsed.hostname or "").lower()
+            if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+                continue
+            platform = next((s_ for s_ in sites if host == s_ or host.endswith("." + s_)), None)
+            if platform is None:
+                continue
+            # help.x.com, docs.x.com and a bare instagram.com are the platform, not content.
+            if parsed.path.strip("/") == "" or host.split(".")[0] in _PLATFORM_CHROME:
+                continue
+            url = _social_url(parsed)
+            canon = urlsplit(url)
+            identity = (canon.netloc.removeprefix("www."), canon.path.rstrip("/") or "/", canon.query)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            title = _strip_tags(str(row.get("title") or ""))[:200]
+            summary = _strip_tags(str(row.get("summary") or ""))[:2000]
+            official = _is_official_handle(canon.path)
+            bait, bait_terms, advisory = ([], {}, False) if official else _bait_analysis(title, summary)
+            kind, account = _social_kind(canon.netloc.removeprefix("www."), canon.path)
+            haystack = f"{title} {summary} {url}".lower()
+            matched = sum(t in haystack for t in tokens)
+            score = (matched / len(tokens)) if tokens else 1.0
+            # Site-restricted queries still return unrelated rows (a wa.me seller
+            # for "limit increase"); with no query term at all it is not a lead,
+            # and wa.me needs half the terms because a number says nothing itself.
+            if tokens and (matched == 0 or (platform == "wa.me" and score < 0.5)):
+                continue
+            by_site[platform].append(Item(
+                url=url, source="social_web_index", source_type="social",
+                title=title, text=summary,
+                author=account,
+                raw_meta={"platform": platform, "indexed": True, "kind": kind,
+                          "account": account,
+                          "term_match": matched > 0 or not tokens,
+                          "term_score": round(score, 2),
+                          "linked_urls": _linked_urls(title, summary),
+                          "bait_signals": bait, "bait_terms": bait_terms, "advisory": advisory,
+                          "official_account": official,
+                          "discovery_method": "duckduckgo_web_index",
+                          "indexed_query": q,
+                          "requests_failed": len(failures),
+                          "requests_total": len(results)},
+            ))
+
+    # Platform-made topic pages go last within their platform, and weaker term
+    # matches below stronger ones; the ranker still sees all of them.
+    for items in by_site.values():
+        items.sort(key=lambda i: (i.raw_meta["kind"] == "topic_page", -i.raw_meta["term_score"]))
+
+    out, depth = [], 0
+    while len(out) < bounded_limit and any(depth < len(v) for v in by_site.values()):
+        for site in sites:
+            if depth < len(by_site[site]) and len(out) < bounded_limit:
+                out.append(by_site[site][depth])
+        depth += 1
+
+    if not out and failures:
+        raise SourceError(f"free social index search failed: {len(failures)} of "
+                          f"{len(results)} requests failed ({failures[0][1]}) and the rest found nothing")
+    return out
 
 
 # -------------------------------------------------------------- SEC EDGAR
@@ -857,5 +1072,9 @@ def has_credentials(name: str) -> bool:
 # than silently changing their meaning.
 RETIRED_BACKENDS = frozenset({"web_search", "mastodon", "bluesky"})
 
+# social_web_index is in the defaults: it is the only default that reaches TikTok,
+# Telegram, Facebook, Instagram and YouTube, and without it a CLI sweep of a scam
+# topic is news-only. Free and keyless; bounded by SOCIAL_DEADLINE.
 DEFAULT_BACKENDS = ["gdelt", "google_news", "wikipedia", "hackernews",
-                    "reddit", "x", "gleif", "opencorporates", "opensanctions"]
+                    "social_web_index", "reddit", "x", "gleif", "opencorporates",
+                    "opensanctions"]
