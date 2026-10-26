@@ -120,6 +120,16 @@ def _adjust(score: int, item: Item) -> int:
     extra = max(0, int(item.raw_meta.get("corroboration", 1)) - 1)
     adjusted += min(extra * 6, 18)
 
+    # Bait phrases on an indexed social lead ("guaranteed", "hit admin inbox",
+    # "slots almost full"). Additive and capped like corroboration: it lifts a
+    # lure above how-to videos, it cannot make an unrelated row relevant.
+    from core.fraud_lexicon import SUBJECT_FAMILIES
+    # Subject families ("fuliza limit increase") match every on-topic result, so they say nothing
+    # about whether it is a lure; only behavioural families (fees, funnels, guarantees...) count.
+    bait = [b for b in (item.raw_meta.get("bait_signals") or []) if b not in SUBJECT_FAMILIES]
+    if len(bait) >= 2 and not item.raw_meta.get("advisory"):
+        adjusted += min(len(bait) * 6, 18)
+
     if _headline_only(item):
         # Cap rather than scale: an unread headline should not reach the top
         # band on keyword overlap alone.
@@ -368,8 +378,8 @@ def sweep(query: str, fetcher: Fetcher, hours: int = 72,
             return item
 
         with ThreadPoolExecutor(max_workers=workers) as pool:
-            futures = [pool.submit(pull, i) for i in needs_body]
-            for f in as_completed(futures):
+            body_futures = [pool.submit(pull, i) for i in needs_body]
+            for f in as_completed(body_futures):
                 try:
                     f.result()
                 except Exception as e:
@@ -428,9 +438,9 @@ def sweep(query: str, fetcher: Fetcher, hours: int = 72,
 
     counts: Counter[str] = Counter()
     for item in result.items:
-        for e in item.entities:
-            if e.strip():
-                counts[e.strip()] += 1
+        for ent in item.entities:
+            if ent.strip():
+                counts[ent.strip()] += 1
     result.entities = counts.most_common(15)
 
     return result
