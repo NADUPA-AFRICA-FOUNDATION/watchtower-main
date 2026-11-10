@@ -1,0 +1,19 @@
+# Keep secrets and local state out of the image. Without this file `COPY . .`
+# copied a local .env (API keys) and the SQLite stores into every build.
+# Patterns match from the build root only, hence the **/ prefixes.
+**/.env
+**/.env.*
+!.env.example
+**/*.db
+**/*.db-wal
+**/*.db-shm
+**/*.csv
+
+.git
+.github
+**/__pycache__
+**/*.pyc
+.venv
+venv
+node_modules
+.pytest_cache

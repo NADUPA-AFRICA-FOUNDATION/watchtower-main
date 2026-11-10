@@ -160,9 +160,9 @@ investigation/storage.py              SQLite entities/evidence/edges/campaigns
 | Source | What it gives you | Key needed |
 |---|---|---|
 | `gdelt` | global news, all languages, 15-min lag | no |
-| `google_news` | broad news, good local outlet recall | no |
+| `google_news` | broad news, good local outlet recall; headlines only unless GDELT carries the same story (the feed hides the article URL) | no |
 | `wikipedia` | entity background, disambiguation | no |
-| `hackernews` | tech and fintech chatter | no |
+| `hackernews` | tech and fintech chatter; not a default, pass `--sources hackernews` | no |
 | `gleif` | legal entity identifiers, corporate structure | no |
 | `sec_edgar` | US filings full-text | no |
 | `opensanctions` | sanctions, PEP and watchlist matches | `OPENSANCTIONS_API_KEY` |

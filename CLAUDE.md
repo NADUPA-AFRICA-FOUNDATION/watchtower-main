@@ -241,6 +241,16 @@ deliberately, because an unsearched sanctions list reported as a clean one is
 the most dangerous silent zero in the tool. The sweep still completes and
 nothing crashes, so the tool stays testable and demoable without any key.
 
+**Google News links are never resolved or fetched.** Its RSS `<link>` is an
+opaque `news.google.com/rss/articles/` token, not the publisher URL, and decoding
+it needs paths that `news.google.com/robots.txt` disallows (it also names
+Anthropic's crawlers). So `google_news` takes the outlet's domain from `<source>`,
+strips the " - Outlet" headline suffix and drops the description, which is only
+the headline again. A bodiless item dedupes on its normalised title, so the GDELT
+copy of the same story, with the real URL, wins the merge and gets read. Facebook
+posts that Google News lists as news are typed `social`. Do not "fix" the
+unresolved links with a decoder: that is crawling a disallowed path.
+
 **Source diversity cap of 3 per domain** in `sweep.py::_diversify`. Without it,
 wire copy fills the entire first page.
 
