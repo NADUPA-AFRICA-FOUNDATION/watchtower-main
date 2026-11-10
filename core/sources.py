@@ -113,9 +113,75 @@ def gdelt(query: str, fetcher: Fetcher, hours: int = 72,
 
 # ------------------------------------------------------------ Google News
 
+GOOGLE_NEWS_HOST = "news.google.com"
+
+# Outlets Google News lists that are really social platforms. Google News
+# returns Facebook posts (and the odd YouTube video) as ordinary items, and
+# ranked at the news tier they read as reporting when they are a lead at best.
+# Subdomains (m.facebook.com) match too. Spelled out rather than built from
+# SOCIAL_SITES, which is defined further down the module.
+_SOCIAL_OUTLETS = frozenset({
+    "facebook.com", "instagram.com", "tiktok.com", "x.com", "twitter.com",
+    "youtube.com", "t.me", "wa.me", "linkedin.com", "reddit.com", "threads.net",
+})
+
+
+def is_google_news_link(url: str) -> bool:
+    """True for news.google.com/rss/articles/... style links.
+
+    These no longer carry the publisher URL. Since 2024 the ID is an opaque
+    token (it base64-decodes to `AU_yqL...`, not to a URL), and turning it back
+    into the article needs requests to news.google.com paths its robots.txt
+    disallows: it is `Disallow: /` with a short allowlist that excludes
+    /rss/articles/, and it names Anthropic's crawlers outright (checked
+    2026-11-10). So we do not resolve them. The sweep recovers the publisher
+    URL a legitimate way instead: GDELT usually carries the same story under
+    its real address, and dedupe merges the two (see sweep.py step 2).
+    """
+    host = (urlsplit(url).hostname or "").lower()
+    return host == GOOGLE_NEWS_HOST or host.endswith("." + GOOGLE_NEWS_HOST)
+
+
+def _norm_text(value: str) -> str:
+    """Lowercase, punctuation to spaces, whitespace collapsed. For comparing
+    headlines that differ only in quotes, dashes or spacing."""
+    return " ".join(re.sub(r"[^\w]+", " ", value.lower()).split())
+
+
+def _gnews_strip_outlet(title: str, outlet: str) -> str:
+    """Google appends " - Outlet" to every headline. Drop it, so the headline
+    matches the same story from GDELT and the outlet name stops counting as a
+    query-term match."""
+    if outlet:
+        for sep in (" - ", " – ", " | "):
+            suffix = f"{sep}{outlet}"
+            if title.endswith(suffix):
+                return title[: -len(suffix)].rstrip()
+    return title
+
+
+def _host(url: str) -> str:
+    host = (urlsplit(url).hostname or "").lower()
+    return host.removeprefix("www.")
+
+
 def google_news(query: str, fetcher: Fetcher, hours: int = 72,
                 limit: int = 30) -> list[Item]:
-    """Published RSS search endpoint. Broader recall than GDELT on local outlets."""
+    """Published RSS search endpoint. Broader recall than GDELT on local outlets.
+
+    What the feed gives and does not give, verified against a live response:
+
+    * `<link>` is a news.google.com redirect token, not the article. See
+      is_google_news_link for why it is left unresolved.
+    * `<description>` is the headline again plus the outlet name, or, for a
+      story cluster, a list of related headlines. Never article text. It used
+      to go into `text`, so a headline counted twice, and as "body" it made an
+      unread item look read.
+    * `<source url=...>` is the outlet's home page. That is the item's real
+      domain. Without it every item was "news.google.com", so the 3-per-domain
+      diversity cap kept three Google News results in total and corroboration
+      counted Google as one outlet.
+    """
     when = f"{max(1, hours // 24)}d" if hours >= 24 else f"{hours}h"
     url = (f"https://news.google.com/rss/search?q={quote_plus(query)}"
            f"+when:{when}&hl=en&gl=KE&ceid=KE:en")
@@ -125,14 +191,43 @@ def google_news(query: str, fetcher: Fetcher, hours: int = 72,
 
     out = []
     for e in feedparser.parse(res.html).entries[:limit]:
-        if not e.get("link"):
+        link = e.get("link")
+        if not link:
             continue
+        source = e.get("source", {}) or {}
+        outlet = (source.get("title") or "").strip()
+        outlet_url = (source.get("href") or "").strip()
+        title = _gnews_strip_outlet((e.get("title") or "").strip(), outlet)
+
+        summary_html = e.get("summary", "") or ""
+        cluster = summary_html.lower().count("<li")
+        text = "" if cluster else _strip_tags(summary_html)
+        if outlet and text.endswith(outlet):
+            text = text[: -len(outlet)].rstrip()
+        # Only a description that says something beyond the headline survives.
+        # Google truncates long headlines in the description, so "is a prefix
+        # of the title" is the same as "is the title".
+        if text and _norm_text(title).startswith(_norm_text(text)):
+            text = ""
+
+        domain = _host(outlet_url) if not is_google_news_link(outlet_url) else ""
+        if not domain and not is_google_news_link(link):
+            domain = _host(link)
+        social = domain in _SOCIAL_OUTLETS or any(
+            domain.endswith("." + s) for s in _SOCIAL_OUTLETS)
+        meta = {"outlet": outlet, "domain": domain, "outlet_url": outlet_url}
+        if is_google_news_link(link):
+            meta["link_unresolved"] = True
+        if cluster:
+            meta["related_headlines"] = cluster
+        if social:
+            meta["social_post"] = True
         out.append(Item(
-            url=e["link"], source="google_news", source_type="news",
-            title=(e.get("title") or "").strip(),
-            text=_strip_tags(e.get("summary", ""))[:1000],
+            url=link, source="google_news",
+            source_type="social" if social else "news",
+            title=title, text=text[:1000],
             published_at=e.get("published", ""),
-            raw_meta={"outlet": (e.get("source", {}) or {}).get("title", "")},
+            raw_meta=meta,
         ))
     return out
 
@@ -347,6 +442,12 @@ def _social_url(parsed) -> str:
     return urlunsplit((parsed.scheme, host, path, query, ""))
 
 
+def _required_terms(n: int) -> int:
+    """How many query words a social-index row must contain without the exact
+    phrase: 60%, rounded up, so 1->1, 2->2, 3->2, 4->3, 5->3."""
+    return max(1, -(-n * 3 // 5))
+
+
 def social_web_index(query: str, fetcher: Fetcher, hours: int = 72,
                      limit: int = 20) -> list[Item]:
     """Find public social URLs through an unauthenticated web index.
@@ -442,6 +543,7 @@ def social_web_index(query: str, fetcher: Fetcher, hours: int = 72,
         raise SourceError(f"free social index search failed: {failures[0][1]}") from failures[0][1]
 
     tokens = [t for t in re.findall(r"[a-z0-9]+", clean_query.lower()) if len(t) >= 4]
+    phrase_norm = _norm_text(clean_query) if multiword else ""
     by_site: dict[str, list[Item]] = {site: [] for site in sites}
     seen = set()
     for _, q, rows, _exc in results:
@@ -472,10 +574,14 @@ def social_web_index(query: str, fetcher: Fetcher, hours: int = 72,
             haystack = f"{title} {summary} {url}".lower()
             matched = sum(t in haystack for t in tokens)
             score = (matched / len(tokens)) if tokens else 1.0
+            phrase = bool(phrase_norm) and phrase_norm in _norm_text(f"{title} {summary}")
             # Site-restricted queries still return unrelated rows (a wa.me seller
-            # for "limit increase"); with no query term at all it is not a lead,
-            # and wa.me needs half the terms because a number says nothing itself.
-            if tokens and (matched == 0 or (platform == "wa.me" and score < 0.5)):
+            # for "limit increase"). One matching word used to be enough, so for
+            # "M-Pesa fraud Kenya" any TikTok that said "Kenya" was a hit. Now it
+            # takes the exact phrase or most of the words: 1 of 1, 2 of 2, 2 of 3,
+            # 3 of 4. That still admits a scam account that never repeats the
+            # investigator's phrasing, which is why the loose query exists.
+            if tokens and not phrase and matched < _required_terms(len(tokens)):
                 continue
             by_site[platform].append(Item(
                 url=url, source="social_web_index", source_type="social",
@@ -485,6 +591,9 @@ def social_web_index(query: str, fetcher: Fetcher, hours: int = 72,
                           "account": account,
                           "term_match": matched > 0 or not tokens,
                           "term_score": round(score, 2),
+                          # "phrase": the query appears verbatim. "terms": only
+                          # enough of its words do, a weaker lead.
+                          "match": "phrase" if phrase or not multiword else "terms",
                           "linked_urls": _linked_urls(title, summary),
                           "bait_signals": bait, "bait_terms": bait_terms, "advisory": advisory,
                           "official_account": official,
@@ -494,10 +603,13 @@ def social_web_index(query: str, fetcher: Fetcher, hours: int = 72,
                           "requests_total": len(results)},
             ))
 
-    # Platform-made topic pages go last within their platform, and weaker term
-    # matches below stronger ones; the ranker still sees all of them.
+    # Platform-made topic pages go last within their platform, then term-only
+    # matches below phrase matches, then weaker term coverage below stronger;
+    # the ranker still sees all of them.
     for items in by_site.values():
-        items.sort(key=lambda i: (i.raw_meta["kind"] == "topic_page", -i.raw_meta["term_score"]))
+        items.sort(key=lambda i: (i.raw_meta["kind"] == "topic_page",
+                                  i.raw_meta["match"] != "phrase",
+                                  -i.raw_meta["term_score"]))
 
     out, depth = [], 0
     while len(out) < bounded_limit and any(depth < len(v) for v in by_site.values()):
@@ -1075,6 +1187,10 @@ RETIRED_BACKENDS = frozenset({"web_search", "mastodon", "bluesky"})
 # social_web_index is in the defaults: it is the only default that reaches TikTok,
 # Telegram, Facebook, Instagram and YouTube, and without it a CLI sweep of a scam
 # topic is news-only. Free and keyless; bounded by SOCIAL_DEADLINE.
-DEFAULT_BACKENDS = ["gdelt", "google_news", "wikipedia", "hackernews",
+#
+# hackernews is not a default. It is a tech forum, and for the questions this
+# tool is pointed at (fraud, sanctions, ownership, regulators) its hits were
+# noise competing for the top of the page. It is still available by name.
+DEFAULT_BACKENDS = ["gdelt", "google_news", "wikipedia",
                     "social_web_index", "reddit", "x", "gleif", "opencorporates",
                     "opensanctions"]
