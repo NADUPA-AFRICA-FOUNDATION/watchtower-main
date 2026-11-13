@@ -40,6 +40,10 @@ budgets:
   max_candidates_per_run: 500
 
 enrichment:
+  # Match candidates against free phishing lists (Phishing.Database, OpenPhish). The lists are
+  # downloaded and matched locally; a candidate's name is never sent to a third party.
+  threat_feeds: true
+  threat_feed_cache_hours: 12
   dns_timeout_seconds: 5
   rdap_min_interval_seconds: 1.0
   rdap_cache_hours: 24

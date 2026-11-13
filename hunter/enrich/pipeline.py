@@ -55,6 +55,7 @@ class Enrichers:
     acquire: Any = None         # a ContentAcquisitionProvider; None disables page capture
     searcher: Any = None        # a SearchBackend for indicator pivots; None = graph lookups only
     reverse_ip: Any = None      # optional ReverseIpBackend
+    threat: Any = None          # optional ThreatFeeds; None = feeds not consulted (and nothing recorded)
 
 
 @dataclass
@@ -190,6 +191,23 @@ def _record_rdap(b: _Batch, r: RdapResult) -> None:
         b.link(Entity("nameserver", ns, ns), "uses_nameserver", ev, 0.95)
     if r.registrar:
         b.link(Entity("registrar", r.registrar.lower(), r.registrar), "registered_with", ev, 0.9)
+
+
+def _record_threat(b: _Batch, t) -> None:
+    """The check is always recorded, so "consulted, not listed" and "could not consult" stay
+    distinguishable; a hit is a second row because that is what scoring reads."""
+    b.fact(b.domain, "threat_feeds", "threat_feed_check", t.facts(), None, {"status": t.status})
+    for feed in t.hits:
+        b.fact(b.domain, "threat_feeds", "threat_feed_hit", {"feed": feed, "matched": t.domain}, None,
+               {"feed": feed}, 0.9)
+
+
+async def _check_threat(ctx: EnrichContext, b: _Batch, domain: str) -> None:
+    """After DNS, not gathered with it: a slow list download must not hold up the lookups
+    everything else routes on. check() reports its own failures and never raises."""
+    if ctx.en.threat is not None:
+        _record_threat(b, await ctx.timed("threat_feeds", ctx.en.threat.check(domain),
+                                          failed=lambda r: r.status == "error", error=lambda r: str(r.errors)))
 
 
 def _record_pages(b: _Batch, cap, snapshot_chars: int) -> None:
@@ -363,6 +381,7 @@ async def investigate(ctx: EnrichContext, cand: dict) -> str:
         tls = await ctx.timed("tls", ctx.en.tls.fetch(domain))
         _record_dns(b, dns)
         _record_tls(b, tls)
+        await _check_threat(ctx, b, domain)       # both passes: a domain is often listed after first sight
         note = f"deep: dns {dns.status}, tls {tls.status}" + (f" ({tls.error})" if tls.error else "")
         if dns.non_public_ips:
             note += f"; resolves to non-public {dns.non_public_ips}"
@@ -390,6 +409,7 @@ async def investigate(ctx: EnrichContext, cand: dict) -> str:
                   error=lambda r: r.error))
     _record_dns(b, dns)
     _record_rdap(b, rdap)
+    await _check_threat(ctx, b, domain)
     b.save()  # facts are kept even when the routing below defers or fails
     change_note = _changes(ctx, cid)
 

@@ -129,6 +129,8 @@ class EnrichConfig:
     # Once the schedule is spent the candidate is IGNORED (visibly, and re-queueable).
     unregistered_recheck_days: list[float] = field(default_factory=lambda: [1, 3, 7, 14, 30])
     max_batch_seconds: float = 600.0     # time budget: candidates not started by then are deferred, visibly
+    threat_feeds: bool = True            # match candidates against free phishing lists (downloaded, matched locally)
+    threat_feed_cache_hours: float = 12.0
 
 
 @dataclass

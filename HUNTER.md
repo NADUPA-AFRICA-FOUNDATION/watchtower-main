@@ -54,7 +54,7 @@ errors, not silently ignored.
 | Alert webhook | set the env var named by `alerts.webhook_env` | off (local only) |
 
 A disabled source shows as `disabled` in the coverage report, never as healthy. Sources the hunter does
-not support (X, Reddit, Bluesky, Mastodon, TikTok, Instagram, Facebook, LinkedIn, threat-intel feeds) are
+not support (X, Reddit, Bluesky, Mastodon, TikTok, Instagram, Facebook, LinkedIn) are
 listed as `unavailable` with the reason. Direct social-platform crawling is intentionally absent.
 
 Environment variables (all optional; nothing paid is required):
