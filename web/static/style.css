@@ -1436,6 +1436,36 @@ textarea#score-text { min-height: 148px; padding: 15px 16px; border-color: #d8db
   .detail-facts dd { padding-top: 0; border-bottom: 1px solid var(--rule); }
 }
 
+/* ------------------------------------------------------------- verdict
+   The plain-language reading of a result. Colour follows the relevance ramp's
+   rule: only "likely scam" and "needs a look" are coloured, because only they
+   ask the reader to do something. */
+.verdict {
+  display: grid;
+  gap: 3px;
+  margin: 10px 0 2px;
+  padding: 10px 12px;
+  border: 1px solid var(--rule);
+  border-left: 4px solid var(--weak);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, .6);
+  font-size: 13px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.verdict-label { font-weight: 700; font-size: 13px; }
+.verdict-reason { color: var(--ink); }
+.verdict-action { font-weight: 600; }
+.verdict-detail { color: var(--muted); font-size: 12px; }
+.verdict-lure { border-left-color: var(--high); background: rgba(168, 44, 34, .06); }
+.verdict-lure .verdict-label, .verdict-lure .verdict-action { color: var(--high); }
+.verdict-check { border-left-color: var(--med); background: rgba(181, 116, 26, .06); }
+.verdict-check .verdict-label { color: var(--med); }
+.verdict-advisory, .verdict-official { border-left-color: var(--low); }
+.verdict-topic, .verdict-none { border-left-color: var(--weak); }
+.verdict-topic .verdict-label, .verdict-none .verdict-label { color: var(--muted); }
+[data-theme="terminal"] .verdict { background: transparent; border-radius: 0; }
+
 /* ------------------------------------------------------ rail alignment
    The sidebar restyle above reuses the old top-bar rules for .rail-nav,
    .mode-switch and .mode-tab, and three of them leaked. An unconstrained grid

@@ -30,6 +30,7 @@ configured — never return [] for either. Nothing else in the pipeline changes.
 from __future__ import annotations
 
 import base64
+import copy
 import json
 import os
 import logging
@@ -333,6 +334,53 @@ def _bait_analysis(*texts: str) -> tuple[list[str], dict[str, list[str]], bool]:
     return sorted(terms), terms, False
 
 
+_TITLE_TAIL = re.compile(r"\s*(?:[-|\u2022\u2013]\s*(?:facebook|tiktok|instagram|telegram|youtube|x)\b.*"
+                         r"|\(@[^)]*\).*|\u2022\s*follow.*|/\s*x\s*$|on (?:x|instagram|tiktok)\b.*)$", re.I)
+_SNIPPET_ACCOUNT = re.compile(r"(?:comments?\s*-\s*([\w. ]{3,40}?)\s+on\s+[A-Z][a-z]+\s+\d"
+                              r"|video from\s+([^(]{3,40}?)\s*\(@\s*([\w.]+)\s*\))")
+_POST_PATHS = {"posts", "videos", "video", "photo", "reel", "reels", "status", "watch", "permalink"}
+
+
+def _lure_identity(platform: str, path: str, kind: str, title: str, text: str) -> str:
+    """The account's own name, if that name is a protected brand plus a service word.
+
+    Identity comes from the handle, the page slug and the account's display name only, never
+    from what a post says: "How to increase your Fuliza limit" by @someone is a how-to video,
+    while a page NAMED "Fuliza Limit Increase" is the thing Safaricom says cannot exist.
+    Returns the matched identity ('' if none) so a reviewer can see why it fired.
+    """
+    from core.fraud_lexicon import IDENTITY_BRANDS, IDENTITY_SERVICES, OFFICIAL_HANDLES
+    if kind == "topic_page" or platform == "youtube.com":
+        return ""
+    parts = [p for p in path.split("/") if p]
+    if not parts:
+        return ""
+    names = []
+    first = parts[0].lstrip("@")
+    if first.lower() in OFFICIAL_HANDLES:
+        return ""
+    is_post = any(p in _POST_PATHS for p in parts[1:]) or first in {"p", "reel", "tv", "watch", "i"} and platform != "facebook.com"
+    if platform == "facebook.com":
+        slug = parts[1] if first in {"p", "public", "people"} and len(parts) > 1 else first
+        if first != "groups" and not slug.isdigit() and slug != "profile.php":
+            names.append(re.sub(r"-\d{6,}$", "", slug))
+    elif first not in {"p", "reel", "tv", "watch", "i", "s", "hashtag", "joinchat"} and not first.startswith("+"):
+        names.append(first)
+    # A profile/page/channel title is the display name; a post's title is the post.
+    if not is_post:
+        names.append(_TITLE_TAIL.sub("", title))
+    m = _SNIPPET_ACCOUNT.search(text or "")
+    if m:
+        names.extend(g for g in m.groups() if g)
+    for name in names:
+        compact = re.sub(r"[^a-z0-9]", "", name.lower())
+        if compact in OFFICIAL_HANDLES or len(compact) > 60:
+            continue
+        if any(b in compact for b in IDENTITY_BRANDS) and any(sv in compact for sv in IDENTITY_SERVICES):
+            return name.strip()[:80]
+    return ""
+
+
 def _social_url(parsed) -> str:
     """Canonical form so one account/post is one row. t.me/s/<name> is the public
     preview of t.me/<name>; ?before=N pages through the same channel."""
@@ -347,8 +395,209 @@ def _social_url(parsed) -> str:
     return urlunsplit((parsed.scheme, host, path, query, ""))
 
 
+# Seconds a complete answer is reused for the same query. Users re-run a sweep when it feels
+# slow; without this every retry is another 60s+ of index requests. Only complete runs are
+# cached, and a cached item says so (`cached_age_seconds`), so a stale answer is never silent.
+SOCIAL_CACHE_TTL = 1800.0
+# Ceiling for the follow-up reads (Telegram previews, link checks) after the search itself.
+SOCIAL_ENRICH_BUDGET = 20.0
+SOCIAL_PREVIEW_MAX = 5
+SOCIAL_LINKS_MAX = 3
+_SOCIAL_CACHE: dict = {}
+_SOCIAL_CACHE_LOCK = threading.Lock()
+
+# One short phrase per family, for people who will never read the lexicon.
+_FAMILY_PLAIN = {
+    "advance_fee": "asks for money upfront", "guarantee_claims": "promises a guaranteed result",
+    "urgency_pressure": "pressures you to act fast", "credential_theft": "asks for a PIN, code or ID",
+    "impersonation": "uses an official-sounding name", "investment_returns": "promises unrealistic returns",
+    "crypto_forex_signals": "pushes trading signals", "job_offer": "offers a job for a fee",
+    "prize_giveaway": "says you have won something", "reversal_wrong_transaction": "asks you to send money back",
+    "contact_funnel": "moves you to a private chat", "fake_social_proof": "shows success stories that cannot be checked",
+    "link_hosting": "links to a throwaway website", "swahili": "uses known scam wording (Kiswahili)",
+    "sheng": "uses known scam wording (Sheng)", "betting_fixed_match": "sells 'sure' betting tips",
+    "emotional_pretext": "uses an emergency story", "fake_support_charity": "asks for donations to a personal number",
+}
+_TG_POST = re.compile(r'<div class="tgme_widget_message_text[^"]*"[^>]*>(.*?)</div>', re.S)
+_TG_SUBS = re.compile(r'<span class="counter_value">([^<]+)</span>\s*<span class="counter_type">subscribers?', re.I)
+
+
+def behavioural_signals(meta: dict) -> list[str]:
+    """Bait families that describe how a lure behaves; the subject of the search is not one."""
+    from core.fraud_lexicon import SUBJECT_FAMILIES
+    if meta.get("advisory"):
+        return []
+    return [b for b in (meta.get("bait_signals") or []) if b not in SUBJECT_FAMILIES]
+
+
+def is_likely_lure(meta: dict) -> bool:
+    """The one rule behind `likely_lure`, the score boost and the verdict, so they cannot disagree."""
+    return bool(meta.get("lure_identity")) or len(behavioural_signals(meta)) >= 2
+
+
+def social_verdict(meta: dict) -> dict:
+    """A plain-language reading of one indexed result: what it looks like, why, and what to do.
+
+    Every field is derived from facts already in `meta`; nothing here is a new judgement. The
+    wording stays honest about depth: most rows were read from a search snippet, not opened.
+    """
+    details = []
+    preview = meta.get("preview") or {}
+    if preview.get("status") == "read":
+        subs = f"{preview['subscribers']} subscribers, " if preview.get("subscribers") else ""
+        details.append(f"Channel opened and read: {subs}{preview.get('posts', 0)} recent posts")
+    elif preview.get("status") == "no_public_preview":
+        details.append("Channel could not be read (it has no public preview page); judged on the search snippet only")
+    elif preview.get("status"):
+        details.append(f"Channel could not be read ({preview.get('error') or 'unavailable'}); judged on the search snippet only")
+    for link in meta.get("link_intel") or []:
+        bits = []
+        if link.get("first_archived"):
+            bits.append(f"first archived {link['first_archived']}")
+        if link.get("urlscan_scans"):
+            bits.append(f"{link['urlscan_scans']} public scan(s)")
+        if link.get("errors"):
+            bits.append("some checks failed: " + ", ".join(link["errors"]))
+        details.append(f"Linked site {link['domain']}: " + ("; ".join(bits) if bits else "no archive or scan history found"))
+
+    def out(level, label, reason, action=""):
+        return {"level": level, "label": label, "reason": reason, "action": action, "details": details}
+
+    behav = behavioural_signals(meta)
+    plain = [_FAMILY_PLAIN.get(b, b.replace("_", " ")) for b in behav]
+    if meta.get("official_account"):
+        return out("official", "Official account", "This is the real brand's own account.")
+    if meta.get("advisory"):
+        return out("advisory", "Warning about a scam",
+                   "The text warns about a scam rather than running one.", "Read it for the accounts it names.")
+    if meta.get("lure_identity"):
+        why = f'The account is named "{meta["lure_identity"]}". A real brand does not offer this through third-party accounts.'
+        if plain:
+            why += " It also " + ", ".join(plain) + "."
+        return out("lure", "Likely scam account", why, "Do not pay or share a PIN or code. Report it to the real company.")
+    if len(behav) >= 2:
+        return out("lure", "Likely scam offer", "It " + ", and ".join(plain) + ".",
+                   "Do not pay or share a PIN or code. Report it to the real company.")
+    if meta.get("kind") == "topic_page":
+        return out("topic", "Platform topic page", "An automatic page listing posts on a topic, not a post or an account.")
+    if behav:
+        return out("check", "Needs a look", "One warning sign: it " + plain[0] + ".", "Open it before deciding.")
+    return out("none", "No scam signs found",
+               "Nothing in the account name or the search snippet matched a known scam pattern. The page itself was not opened.")
+
+
+def _telegram_preview(fetcher, name: str) -> dict:
+    """Read a channel's public preview page (t.me/s/<name>): the same page anyone sees logged out.
+
+    A channel's snippet in a search index is one stale sentence; the preview carries the recent
+    posts, which is where the fee and "message the admin" wording actually lives. Fetched as a
+    page (robots applies), never through an account.
+    """
+    res = fetcher.get(f"https://t.me/s/{name}", retries=0, timeout=8)
+    if not res.ok:
+        return {"status": "unavailable", "error": res.error or f"HTTP {res.status}"}
+    posts = [_strip_tags(p).strip() for p in _TG_POST.findall(res.html)]
+    posts = [p for p in posts if p]
+    if not posts:
+        # Private channels, groups and plain user accounts have no preview; t.me serves the
+        # contact page instead. That is "no public preview", not "an empty channel".
+        return {"status": "no_public_preview"}
+    subs = _TG_SUBS.search(res.html)
+    return {"status": "read", "posts": len(posts), "subscribers": subs.group(1).strip() if subs else "",
+            "excerpt": posts[-1][:300], "_texts": posts[-20:]}
+
+
+def _link_intel(fetcher, domain: str) -> dict:
+    """History for a site a post links to: first Wayback capture and public urlscan.io scans.
+
+    Both are lookups in archives other people already made; the site itself is not contacted.
+    A failed lookup is listed in `errors`, never folded into "no history".
+    """
+    out: dict = {"domain": domain, "errors": []}
+    res = fetcher.get("https://web.archive.org/cdx/search/cdx?" + urlencode(
+        {"url": domain, "output": "json", "limit": 1, "fl": "timestamp"}), api=True, retries=0, timeout=8)
+    try:
+        if not res.ok and res.status != 200:
+            raise ValueError(res.error or f"HTTP {res.status}")
+        rows = json.loads(res.html or "[]")
+        if len(rows) > 1 and rows[1]:
+            ts = str(rows[1][0])
+            out["first_archived"] = f"{ts[:4]}-{ts[4:6]}-{ts[6:8]}"
+            out["archive_url"] = f"https://web.archive.org/web/{ts}/{domain}"
+    except (ValueError, IndexError, TypeError):
+        out["errors"].append("archive lookup")
+    res = fetcher.get("https://urlscan.io/api/v1/search/?" + urlencode({"q": f"domain:{domain}", "size": 3}),
+                      api=True, retries=0, timeout=8)
+    try:
+        if not res.ok:
+            raise ValueError(res.error or f"HTTP {res.status}")
+        data = json.loads(res.html)
+        results = data.get("results") or []
+        out["urlscan_scans"] = int(data.get("total") or len(results))
+        if results:
+            out["urlscan_url"] = str(results[0].get("result") or "").replace("/api/v1/result/", "/result/")
+            out["last_scanned"] = str((results[0].get("task") or {}).get("time") or "")[:10]
+    except (ValueError, TypeError, AttributeError):
+        out["errors"].append("scan lookup")
+    return out
+
+
+def _enrich_social(items: list[Item], fetcher) -> None:
+    """Open the few results worth opening. Bounded by count and by SOCIAL_ENRICH_BUDGET."""
+    from core.fraud_lexicon import match
+    deadline = time.monotonic() + SOCIAL_ENRICH_BUDGET
+    channels = [i for i in items if i.raw_meta["platform"] == "t.me" and i.raw_meta["kind"] == "channel"
+                and i.raw_meta.get("account") and not i.raw_meta.get("official_account")][:SOCIAL_PREVIEW_MAX]
+    for item in channels:
+        meta = item.raw_meta
+        if time.monotonic() > deadline:
+            meta["preview"] = {"status": "unavailable", "error": "time budget reached"}
+            continue
+        try:
+            preview = _telegram_preview(fetcher, meta["account"])
+        except Exception as exc:                                    # noqa: BLE001 - recorded on the item
+            preview = {"status": "unavailable", "error": f"{type(exc).__name__}"}
+        texts = preview.pop("_texts", [])
+        meta["preview"] = preview
+        # Post by post, so one "beware of fake admins" notice (which lure channels post too)
+        # silences only itself, while a news channel quoting a scam is silenced where it warns.
+        terms = {k: set(v) for k, v in (meta.get("bait_terms") or {}).items()}
+        for post in texts:
+            if _ADVISORY.search(post):
+                continue
+            for family, hits in match(post).items():
+                terms.setdefault(family, set()).update(hits)
+            for family, rx in _BAIT_SHAPE_RE.items():
+                found = {m.group(0).lower() for m in rx.finditer(post)}
+                if found:
+                    terms.setdefault(family, set()).update(found)
+            for url in _linked_urls(post):
+                if url not in meta["linked_urls"] and len(meta["linked_urls"]) < 5:
+                    meta["linked_urls"].append(url)
+        if texts and not meta.get("advisory"):
+            meta["bait_terms"] = {k: sorted(v)[:8] for k, v in terms.items()}
+            meta["bait_signals"] = sorted(terms)
+
+    seen: dict[str, dict] = {}
+    for item in items:
+        if item.raw_meta.get("official_account"):
+            continue
+        for url in item.raw_meta.get("linked_urls") or []:
+            domain = (urlsplit(url).hostname or "").lower().removeprefix("www.")
+            if not domain:
+                continue
+            if domain not in seen:
+                if len(seen) >= SOCIAL_LINKS_MAX or time.monotonic() > deadline:
+                    continue
+                try:
+                    seen[domain] = _link_intel(fetcher, domain)
+                except Exception:                                   # noqa: BLE001 - recorded on the item
+                    seen[domain] = {"domain": domain, "errors": ["archive lookup", "scan lookup"]}
+            item.raw_meta.setdefault("link_intel", []).append(seen[domain])
+
+
 def social_web_index(query: str, fetcher: Fetcher, hours: int = 72,
-                     limit: int = 20) -> list[Item]:
+                     limit: int = 20, on_partial=None) -> list[Item]:
     """Find public social URLs through an unauthenticated web index.
 
     This complements the authenticated/paid social APIs: it never bypasses a
@@ -365,6 +614,10 @@ def social_web_index(query: str, fetcher: Fetcher, hours: int = 72,
     never counted as a zero: every item carries ``requests_failed``, and no
     items with any failure raises.
 
+    ``on_partial(new_items, total_so_far)`` is called as each platform answers,
+    so a caller can show results during the minute this takes instead of at
+    the end. Those early items are not yet enriched or given a verdict.
+
     ``hours`` is ignored: the index has no date filter. Said here because the
     other backends honour it and a reader would assume this one does too.
     """
@@ -375,6 +628,16 @@ def social_web_index(query: str, fetcher: Fetcher, hours: int = 72,
         raise SourceError("social index query must contain at least 2 characters")
 
     bounded_limit = max(1, min(int(limit), 30))
+    cache_key = (clean_query.lower(), bounded_limit)
+    if SOCIAL_CACHE_TTL > 0:
+        with _SOCIAL_CACHE_LOCK:
+            hit = _SOCIAL_CACHE.get(cache_key)
+        if hit and time.monotonic() - hit[0] < SOCIAL_CACHE_TTL:
+            fresh = copy.deepcopy(hit[1])
+            for item in fresh:
+                item.raw_meta["cached_age_seconds"] = int(time.monotonic() - hit[0])
+            return fresh
+
     sites = SOCIAL_SITES
     # Exact phrase for precision; loose form because a throwaway scam account
     # rarely repeats an investigator's phrase verbatim. The loose form only runs
@@ -398,57 +661,34 @@ def social_web_index(query: str, fetcher: Fetcher, hours: int = 72,
                 last = exc
         return site, q, [], last
 
-    def run(site):
-        out_ = [one(site, f'"{clean_query}" site:{site}')]
-        if multiword and len(out_[0][2]) < 4 and not stop.is_set():
-            out_.append(one(site, f"{clean_query} site:{site}"))
-        return out_
-
-    jobs = list(sites)
-
-    # Daemon threads, not ThreadPoolExecutor: its workers are joined at interpreter
+    # Daemon thread, not ThreadPoolExecutor: its workers are joined at interpreter
     # exit, so one request stuck in a socket kept the whole process alive after the
     # sweep had printed its report. A daemon thread can simply be abandoned.
-    pending_jobs = queue.Queue()
-    for job in jobs:
-        pending_jobs.put(job)
-    finished: list = []
-    lock = threading.Lock()
-
-    def worker():
-        while not stop.is_set():
-            try:
-                job = pending_jobs.get_nowait()
-            except queue.Empty:
-                return
-            res = run(job)
-            with lock:
-                finished.extend(res)
-
     # One worker on purpose. ddgs builds a primp client per request and primp logs
     # through Python's logging from Rust; with three threads doing that at once the
     # process deadlocked (stack dump: all three inside http_client.__init__ /
     # logging.emit). Pacing already dominates the latency, so parallelism bought little.
+    finished: queue.Queue = queue.Queue()
+
+    def worker():
+        for site in sites:
+            if stop.is_set():
+                return
+            first = one(site, f'"{clean_query}" site:{site}')
+            finished.put(first)
+            if multiword and len(first[2]) < 4 and not stop.is_set():
+                finished.put(one(site, f"{clean_query} site:{site}"))
+
     logging.getLogger("primp").setLevel(logging.ERROR)
     thread = threading.Thread(target=worker, daemon=True)
     thread.start()
-    thread.join(SOCIAL_DEADLINE)
-    stop.set()
-    with lock:
-        results = list(finished)
-    answered = {site for site, _, _, _ in results}
-    # Queued-but-never-run platforms and stuck ones are both "could not look", not zeros.
-    results += [(site, f'"{clean_query}" site:{site}', [], TimeoutError(f"no answer within {SOCIAL_DEADLINE:.0f}s"))
-                for site in jobs if site not in answered]
-
-    failures = [(q, exc) for _, q, _, exc in results if exc is not None]
-    if len(failures) == len(results):
-        raise SourceError(f"free social index search failed: {failures[0][1]}") from failures[0][1]
 
     tokens = [t for t in re.findall(r"[a-z0-9]+", clean_query.lower()) if len(t) >= 4]
     by_site: dict[str, list[Item]] = {site: [] for site in sites}
     seen = set()
-    for _, q, rows, _exc in results:
+
+    def ingest(q, rows) -> list[Item]:
+        new = []
         for row in rows or []:
             if not isinstance(row, dict):
                 continue
@@ -464,15 +704,11 @@ def social_web_index(query: str, fetcher: Fetcher, hours: int = 72,
                 continue
             url = _social_url(parsed)
             canon = urlsplit(url)
-            identity = (canon.netloc.removeprefix("www."), canon.path.rstrip("/") or "/", canon.query)
-            if identity in seen:
+            identity_key = (canon.netloc.removeprefix("www."), canon.path.rstrip("/") or "/", canon.query)
+            if identity_key in seen:
                 continue
-            seen.add(identity)
             title = _strip_tags(str(row.get("title") or ""))[:200]
             summary = _strip_tags(str(row.get("summary") or ""))[:2000]
-            official = _is_official_handle(canon.path)
-            bait, bait_terms, advisory = ([], {}, False) if official else _bait_analysis(title, summary)
-            kind, account = _social_kind(canon.netloc.removeprefix("www."), canon.path)
             haystack = f"{title} {summary} {url}".lower()
             matched = sum(t in haystack for t in tokens)
             score = (matched / len(tokens)) if tokens else 1.0
@@ -481,7 +717,13 @@ def social_web_index(query: str, fetcher: Fetcher, hours: int = 72,
             # and wa.me needs half the terms because a number says nothing itself.
             if tokens and (matched == 0 or (platform == "wa.me" and score < 0.5)):
                 continue
-            by_site[platform].append(Item(
+            seen.add(identity_key)
+            official = _is_official_handle(canon.path)
+            bait, bait_terms, advisory = ([], {}, False) if official else _bait_analysis(title, summary)
+            kind, account = _social_kind(canon.netloc.removeprefix("www."), canon.path)
+            identity = "" if (official or advisory) else _lure_identity(
+                platform, canon.path, kind, title, summary)
+            item = Item(
                 url=url, source="social_web_index", source_type="social",
                 title=title, text=summary,
                 author=account,
@@ -492,11 +734,45 @@ def social_web_index(query: str, fetcher: Fetcher, hours: int = 72,
                           "linked_urls": _linked_urls(title, summary),
                           "bait_signals": bait, "bait_terms": bait_terms, "advisory": advisory,
                           "official_account": official,
+                          "lure_identity": identity,
                           "discovery_method": "duckduckgo_web_index",
-                          "indexed_query": q,
-                          "requests_failed": len(failures),
-                          "requests_total": len(results)},
-            ))
+                          "indexed_query": q},
+            )
+            by_site[platform].append(item)
+            new.append(item)
+        return new
+
+    # Results are ingested here as they arrive, so a caller can be told about each platform
+    # while the rest are still being asked.
+    results = []
+    deadline = time.monotonic() + SOCIAL_DEADLINE
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        try:
+            res = finished.get(timeout=min(remaining, 0.25))
+        except queue.Empty:
+            if not thread.is_alive() and finished.empty():
+                break
+            continue
+        results.append(res)
+        new = ingest(res[1], res[2])
+        if new and on_partial is not None:
+            try:
+                on_partial(new, sum(len(v) for v in by_site.values()))
+            except Exception:                              # noqa: BLE001 - a display hook must not fail the search
+                pass
+    stop.set()
+
+    answered = {site for site, _, _, _ in results}
+    # Queued-but-never-run platforms and stuck ones are both "could not look", not zeros.
+    results += [(site, f'"{clean_query}" site:{site}', [], TimeoutError(f"no answer within {SOCIAL_DEADLINE:.0f}s"))
+                for site in sites if site not in answered]
+
+    failures = [(q, exc) for _, q, _, exc in results if exc is not None]
+    if len(failures) == len(results):
+        raise SourceError(f"free social index search failed: {failures[0][1]}") from failures[0][1]
 
     # Platform-made topic pages go last within their platform, and weaker term
     # matches below stronger ones; the ranker still sees all of them.
@@ -513,6 +789,20 @@ def social_web_index(query: str, fetcher: Fetcher, hours: int = 72,
     if not out and failures:
         raise SourceError(f"free social index search failed: {len(failures)} of "
                           f"{len(results)} requests failed ({failures[0][1]}) and the rest found nothing")
+
+    if fetcher is not None:
+        _enrich_social(out, fetcher)
+    for item in out:
+        item.raw_meta["requests_failed"] = len(failures)
+        item.raw_meta["requests_total"] = len(results)
+        item.raw_meta["verdict"] = social_verdict(item.raw_meta)
+
+    # Only a complete answer is worth reusing; a partial one should be retried, not replayed.
+    if SOCIAL_CACHE_TTL > 0 and not failures:
+        with _SOCIAL_CACHE_LOCK:
+            _SOCIAL_CACHE[cache_key] = (time.monotonic(), copy.deepcopy(out))
+            for key in [k for k, v in _SOCIAL_CACHE.items() if time.monotonic() - v[0] >= SOCIAL_CACHE_TTL]:
+                _SOCIAL_CACHE.pop(key, None)
     return out
 
 

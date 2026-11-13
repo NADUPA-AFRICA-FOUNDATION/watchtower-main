@@ -281,7 +281,11 @@ def list_sources():
     return {
         "sources": [
             *free_sources,
-            *(item for item in legacy if item["name"] not in
+            # A name can exist on both surfaces: `social_web_index` is an investigation
+            # provider and a Monitor backend. Dropping the Monitor entry as a duplicate
+            # removed its chip, so web sweeps silently never searched social media.
+            # A sweep backend always keeps its Monitor entry; the UI filters by surface.
+            *(item for item in legacy if item["name"] in DEFAULT_BACKENDS or item["name"] not in
               {source["name"] for source in free_sources}),
         ],
         "ai_available": enricher.enabled,

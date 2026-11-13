@@ -397,8 +397,18 @@ SUBJECT_FAMILIES = frozenset({"loan_limit_boost"})
 # ("increase your Fuliza limit"); it is the thing being impersonated, not an impersonator.
 # Matched on the whole handle only, so a lookalike (safaricom_plc_ke) is not excused.
 OFFICIAL_HANDLES = frozenset({"safaricomplc", "safaricom", "safaricom_care", "safaricomnews",
-                              "safaricomethiopia", "mpesa", "mpesafoundation", "nse_plc",
-                              "cmakenya", "centralbankkenya"})
+                              "safaricomethiopia", "safaricomfoundation", "mpesa", "mpesaafrica",
+                              "mpesafoundation", "mpesafoundationacademy", "nse_plc", "cmakenya",
+                              "centralbankkenya", "kcbinkenya", "kcbgroup"})
+
+# Brands whose name in a third-party account's identity is itself the lure: Safaricom states that
+# no third party can raise a Fuliza limit and that Ziidi has no standalone presence, so an account
+# CALLED "Fuliza Limit Increase" needs no further bait wording to be worth a look. Matched on the
+# identity with punctuation removed, so "fuliza_limit.boost" and "FulizaLimitBoost" are the same.
+IDENTITY_BRANDS = ("fuliza", "mshwari", "mpesa", "safaricom", "ziidi", "hustlerfund", "okoajahazi", "kcbmpesa")
+IDENTITY_SERVICES = ("increase", "increament", "increment", "increasment", "boost", "upgrade", "limit", "loan",
+                     "promo", "giveaway", "agent", "customercare", "support", "assistant", "portal",
+                     "moneymarket", "invest", "signals", "trading")
 
 COMPILED: dict[str, re.Pattern[str]] = {
     cat: re.compile("|".join(sorted((_phrase_pattern(p) for p in set(terms)), key=len, reverse=True)), re.I)

@@ -74,6 +74,8 @@ def progress_line(event: dict) -> str:
             # tells you what to do, "SourceError" does not.
             return f"  {name:<14} FAILED ({event.get('reason') or event['error']})"
         return f"  {name:<14} {count} hit(s)"
+    if kind == "partial":
+        return f"  {event['name']:<14} {event['count']} so far"
     if kind == "stage":
         stage = event["stage"]
         if stage == "dedupe":
@@ -85,6 +87,14 @@ def progress_line(event: dict) -> str:
     if kind == "scored":
         return f"    [{event['relevance']:>3}] {event['title']}"
     return ""
+
+
+def _verdict_line(item) -> str:
+    """The plain-language reading of an indexed social result, on one line ('' if it has none)."""
+    v = (item.raw_meta or {}).get("verdict") or {}
+    if not v.get("label"):
+        return ""
+    return " ".join(x for x in (f"{v['label']}:", v.get("reason", ""), v.get("action", "")) if x)
 
 
 # ------------------------------------------------------------- terminal
@@ -126,6 +136,9 @@ def terminal(result: SweepResult, top: int = 20) -> str:
             meta += f"  |  {item.published_at[:16]}"
         lines.append(f"      {meta}")
         lines.append(f"      {item.url}")
+        verdict = _verdict_line(item)
+        if verdict:
+            lines.append(f"      >> {verdict}")
         body = item.summary or _short(item.text, 150)
         if body:
             lines.append(f"      {body}")
@@ -222,6 +235,8 @@ def markdown(result: SweepResult) -> str:
                + (f" · {_cell(item.author)}" if item.author else ""),
                "",
                f"**Original:** {_md_link(item.url, item.url)}", ""]
+        if _verdict_line(item):
+            md += [f"**Reading:** {_md_text(_verdict_line(item))}", ""]
         if item.summary:
             md += [f"**Summary:** {_md_text(_short(item.summary, 500))}", ""]
         elif item.text:
@@ -288,7 +303,8 @@ def html_report(result: SweepResult) -> str:
             f'<span class="score score-{label.lower()}">{label} · {item.relevance}/100</span>'
             f'<span class="source">{_html_text(item.source)}</span></div>'
             f'<h3><a href="{_href(item.url)}">{_html_text(item.title or "Untitled")}</a></h3>'
-            f'<p>{details or "No article body was available."}</p>'
+            + (f'<p><strong>{_html_text(_verdict_line(item))}</strong></p>' if _verdict_line(item) else "")
+            + f'<p>{details or "No article body was available."}</p>'
             f'<div class="finding-meta">{_html_text(item.published_at[:16] if item.published_at else "Date unavailable")}'
             f'{" · " + _html_text(item.author) if item.author else ""}</div></div></article>'
         )

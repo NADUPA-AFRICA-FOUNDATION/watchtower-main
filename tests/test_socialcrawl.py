@@ -115,6 +115,7 @@ def test_socialcrawl_reports_unusable_paid_results(monkeypatch):
 @pytest.fixture(autouse=True)
 def _no_pacing(monkeypatch):
     monkeypatch.setattr("core.sources.SOCIAL_PACE", 0)
+    monkeypatch.setattr("core.sources.SOCIAL_CACHE_TTL", 0)       # the cache has its own test below
 
 
 def test_free_social_index_maps_public_platform_results(monkeypatch):
@@ -392,3 +393,162 @@ def test_official_brand_accounts_are_excluded_but_lookalikes_are_not(monkeypatch
     items = {i.url.split("/")[3]: i for i in social_web_index("Fuliza limit", _fetcher(lambda r: httpx.Response(500)))}
     assert items["SafaricomPLC"].raw_meta["official_account"] and items["SafaricomPLC"].raw_meta["bait_signals"] == []
     assert not items["SafaricomPLC.ke"].raw_meta["official_account"] and items["SafaricomPLC.ke"].raw_meta["bait_signals"]
+
+
+def test_lure_identity_reads_the_account_name_not_the_post():
+    from core.sources import _lure_identity
+    hit = lambda *a: bool(_lure_identity(*a))
+    # an account NAMED for the service
+    assert hit("facebook.com", "/p/Fuliza-Limit-Increase-61553909956354/", "post", "Fuliza Limit Increase - Facebook", "")
+    assert hit("tiktok.com", "/@fulizaboost1/video/1", "post", "Apply now | TikTok", "")
+    assert hit("tiktok.com", "/@safaricom_ke", "profile", "FULIZA LIMIT INCREASE (@safaricom_ke) | TikTok", "")
+    assert hit("t.me", "/fulizaincrementszz", "channel", "Telegram: Contact @fulizaincrementszz", "")
+    assert hit("instagram.com", "/p/Abc/", "post", "Instagram", "1 likes, 0 comments - limit.fulizaboostincrease on March 1, 2026: x")
+    # a how-to post by an unrelated account, a topic page, a video site, and the real brand
+    assert not hit("tiktok.com", "/@ivy.mookie1/video/1", "post", "How to Increase Your Fuliza Limit | TikTok", "")
+    assert not hit("tiktok.com", "/discover/fuliza-limit-increase", "topic_page", "Fuliza Limit Increase | TikTok", "")
+    assert not hit("youtube.com", "/watch", "post", "How to increase fuliza limit - YouTube", "")
+    assert not hit("facebook.com", "/SafaricomPLC/posts/increase-your-fuliza-limit/1", "post", "Safaricom PLC - Increase your Fuliza limit", "")
+    assert not hit("x.com", "/MPESAAfrica", "profile", "M-PESA Africa (@MPESAAfrica) / X", "")
+    assert not hit("facebook.com", "/tuko.co.ke/posts/safaricom-explains-how-to-increase-m-shwari-loan-limit/1", "post",
+                   "Safaricom explains how to increase M-Shwari loan limit", "")
+
+
+def test_a_named_lure_account_is_flagged_alone_and_an_advisory_never_is():
+    from core.models import Item
+    from core.sweep import _adjust
+    mk = lambda **m: Item(url="https://t.me/x", source="social_web_index", source_type="social",
+                          title="t", text="x" * 300, raw_meta=m)
+    base = _adjust(40, mk())
+    named = mk(lure_identity="Fuliza Limit Increase")
+    assert _adjust(40, named) == base + 18 and named.raw_meta["likely_lure"] is True
+    plain = mk(bait_signals=["urgency_pressure"])
+    assert _adjust(40, plain) == base and "likely_lure" not in plain.raw_meta
+    warned = mk(bait_signals=["advance_fee", "contact_funnel"], advisory=True)
+    assert _adjust(40, warned) == base and "likely_lure" not in warned.raw_meta
+
+
+# ---------------------------------------------------------------- verdicts, previews, links, cache, streaming
+
+TG_PAGE = """<html><div class="tgme_channel_info_counter"><span class="counter_value">825</span>
+<span class="counter_type">subscribers</span></div>
+<div class="tgme_widget_message_text js-message_text" dir="auto">Beware of fake admins, we are the only real one</div>
+<div class="tgme_widget_message_text js-message_text" dir="auto">Increment is guaranteed. Hit admin inbox and be
+ready with the charges. Apply at https://boost-now.vercel.app</div></html>"""
+
+
+def _net(request):
+    host = request.url.host
+    if host == "t.me" and request.url.path == "/robots.txt":
+        return httpx.Response(404)
+    if host == "t.me" and request.url.path == "/s/quietchan":
+        return httpx.Response(200, text=TG_PAGE)
+    if host == "t.me":
+        return httpx.Response(200, text="<html><div class='tgme_page'>Send Message</div></html>")
+    if host == "web.archive.org":
+        return httpx.Response(200, text='[["timestamp"],["20260511100134"]]')
+    if host == "urlscan.io":
+        return httpx.Response(200, json={"total": 3, "results": [
+            {"result": "https://urlscan.io/api/v1/result/abc/", "task": {"time": "2026-06-01T10:00:00Z"}}]})
+    return httpx.Response(500)
+
+
+def test_verdict_says_what_it_is_why_and_what_to_do():
+    from core.sources import social_verdict
+    assert social_verdict({"official_account": True})["level"] == "official"
+    assert social_verdict({"advisory": True, "bait_signals": ["advance_fee", "contact_funnel"]})["level"] == "advisory"
+    named = social_verdict({"lure_identity": "Fuliza Limit Increase", "bait_signals": ["urgency_pressure"]})
+    assert named["level"] == "lure" and "Fuliza Limit Increase" in named["reason"] and "act fast" in named["reason"] and named["action"]
+    two = social_verdict({"bait_signals": ["advance_fee", "contact_funnel", "loan_limit_boost"]})
+    assert two["level"] == "lure" and "money upfront" in two["reason"] and "private chat" in two["reason"]
+    assert social_verdict({"bait_signals": ["advance_fee", "loan_limit_boost"]})["level"] == "check"   # subject is not a sign
+    assert social_verdict({"kind": "topic_page"})["level"] == "topic"
+    clean = social_verdict({})
+    assert clean["level"] == "none" and "not opened" in clean["reason"]                               # honest about depth
+
+
+def test_telegram_preview_is_read_and_can_turn_a_quiet_snippet_into_a_lure(monkeypatch):
+    def search(query, max_results):
+        if "site:t.me" in query:
+            return [{"title": "Quiet channel about watch tower", "url": "https://t.me/quietchan", "summary": "x"},
+                    {"title": "watch tower private", "url": "https://t.me/nopreview", "summary": "x"}]
+        return []
+
+    monkeypatch.setattr("osint_discovery.search_duckduckgo", search)
+    items = {i.raw_meta["account"]: i for i in social_web_index("watch tower", _fetcher(_net))}
+    read = items["quietchan"].raw_meta
+    assert read["preview"]["status"] == "read" and read["preview"]["subscribers"] == "825" and read["preview"]["posts"] == 2
+    # the "beware of fake admins" post silences only itself; the offer post still counts
+    assert {"guarantee_claims", "contact_funnel", "advance_fee"} <= set(read["bait_signals"]) and not read["advisory"]
+    assert read["verdict"]["level"] == "lure" and any("825 subscribers" in d for d in read["verdict"]["details"])
+    assert "https://boost-now.vercel.app" in read["linked_urls"]
+    intel = read["link_intel"][0]
+    assert intel["first_archived"] == "2026-05-11" and intel["urlscan_scans"] == 3 and intel["errors"] == []
+    assert intel["urlscan_url"] == "https://urlscan.io/result/abc/"
+    none = items["nopreview"].raw_meta
+    assert none["preview"]["status"] == "no_public_preview" and none["verdict"]["level"] == "none"
+    assert any("could not be read" in d for d in none["verdict"]["details"])                          # never "empty channel"
+
+
+def test_failed_preview_and_link_lookups_are_reported_not_treated_as_clean(monkeypatch):
+    def search(query, max_results):
+        if "site:t.me" in query:
+            return [{"title": "watch tower", "url": "https://t.me/somechan",
+                     "summary": "watch tower offer at https://some-site.example now"}]
+        return []
+
+    monkeypatch.setattr("osint_discovery.search_duckduckgo", search)
+    meta = social_web_index("watch tower", _fetcher(lambda request: httpx.Response(500)))[0].raw_meta
+    assert meta["preview"]["status"] == "unavailable"
+    assert meta["link_intel"][0]["errors"] == ["archive lookup", "scan lookup"]
+    assert any("some checks failed" in d for d in meta["verdict"]["details"])
+
+
+def test_complete_answers_are_cached_and_say_so_but_partial_ones_are_not(monkeypatch):
+    import core.sources as src
+    monkeypatch.setattr(src, "SOCIAL_CACHE_TTL", 600)
+    src._SOCIAL_CACHE.clear()
+    calls = []
+
+    def search(query, max_results):
+        calls.append(query)
+        return [{"title": "cache topic", "url": "https://t.me/cachechan", "summary": "x"}] if "site:t.me" in query else []
+
+    monkeypatch.setattr("osint_discovery.search_duckduckgo", search)
+    first = social_web_index("cache topic", None)
+    n = len(calls)
+    second = social_web_index("Cache  Topic", None)                      # same query after normalising
+    assert len(calls) == n and "cached_age_seconds" in second[0].raw_meta and "cached_age_seconds" not in first[0].raw_meta
+    second[0].raw_meta["verdict"]["label"] = "mutated"
+    assert social_web_index("cache topic", None)[0].raw_meta["verdict"]["label"] != "mutated"      # callers get copies
+
+    src._SOCIAL_CACHE.clear()
+    monkeypatch.setattr("osint_discovery.search_duckduckgo",
+                        lambda q, max_results: (_ for _ in ()).throw(RuntimeError("x")) if "tiktok" in q else search(q, max_results))
+    social_web_index("cache topic", None)
+    assert src._SOCIAL_CACHE == {}                                       # a partial answer is retried, not replayed
+    src._SOCIAL_CACHE.clear()
+
+
+def test_results_are_reported_platform_by_platform_and_the_sweep_forwards_them(monkeypatch):
+    def search(query, max_results):
+        for site in ("tiktok.com", "t.me"):
+            if f"site:{site}" in query and query.startswith('"'):
+                return [{"title": f"stream topic on {site}", "url": f"https://{site}/acct{site[:2]}", "summary": f"about {site}"}]
+        return []
+
+    monkeypatch.setattr("osint_discovery.search_duckduckgo", search)
+    seen = []
+    social_web_index("stream topic", None, on_partial=lambda new, total: seen.append((len(new), total)))
+    assert seen == [(1, 1), (1, 2)]
+    # a broken display hook never fails the search
+    assert len(social_web_index("stream topic", None, on_partial=lambda new, total: 1 / 0)) == 2
+
+    from core.sweep import sweep
+    events = []
+    result = sweep("stream topic", _fetcher(_net), backends=["social_web_index"], fetch_bodies=False, progress=events.append)
+    partial = [e for e in events if e["type"] == "partial"]
+    assert [e["count"] for e in partial] == [1, 2] and partial[0]["name"] == "social_web_index" and partial[0]["preview"]
+    assert len(result.items) == 2 and all(i.raw_meta["verdict"]["label"] for i in result.items)
+    from core.report import progress_line
+    assert "2 so far" in progress_line(partial[1])
