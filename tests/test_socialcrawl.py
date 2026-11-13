@@ -363,7 +363,7 @@ def test_deadline_stops_the_abandoned_worker_from_working_through_the_queue(monk
     release.set()
     import time as _t
     _t.sleep(0.5)
-    assert len(calls) <= 2          # the stuck request (and at most its retry), not the other 6 platforms
+    assert len(calls) == 1          # only the stuck request: no retry, no loose follow-up, no other platform
 
 
 def test_subject_family_alone_never_lifts_a_score_and_official_handles_are_not_scored():

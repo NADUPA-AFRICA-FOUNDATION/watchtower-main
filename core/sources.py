@@ -381,10 +381,17 @@ def social_web_index(query: str, fetcher: Fetcher, hours: int = 72,
     # where the exact one came back thin: it halves the requests on a busy topic.
     multiword = " " in clean_query
 
+    # Set at the deadline. Checked before every request, not just between platforms:
+    # an abandoned worker that wakes from a stuck call must not send its retry or
+    # its loose-phrasing follow-up after the sweep has moved on.
+    stop = threading.Event()
+
     def one(site, q):
-        last = None
+        last = TimeoutError("abandoned at the deadline")
         for attempt in range(2):
             time.sleep(SOCIAL_PACE * (1 + attempt))
+            if stop.is_set():
+                break
             try:
                 return site, q, osint_discovery.search_duckduckgo(q, max_results=10), None
             except Exception as exc:                       # noqa: BLE001 - reported, not hidden
@@ -393,7 +400,7 @@ def social_web_index(query: str, fetcher: Fetcher, hours: int = 72,
 
     def run(site):
         out_ = [one(site, f'"{clean_query}" site:{site}')]
-        if multiword and len(out_[0][2]) < 4:
+        if multiword and len(out_[0][2]) < 4 and not stop.is_set():
             out_.append(one(site, f"{clean_query} site:{site}"))
         return out_
 
@@ -407,11 +414,8 @@ def social_web_index(query: str, fetcher: Fetcher, hours: int = 72,
         pending_jobs.put(job)
     finished: list = []
     lock = threading.Lock()
-    stop = threading.Event()
 
     def worker():
-        # `stop` is set at the deadline so an abandoned worker does not keep working
-        # through the queue (and hitting the index) after the sweep has moved on.
         while not stop.is_set():
             try:
                 job = pending_jobs.get_nowait()
