@@ -899,7 +899,7 @@ textarea#score-text::placeholder { color: var(--faint); }
   --radius: 18px;
   --mono: "Fira Code", ui-monospace, SFMono-Regular, Menlo, monospace;
   --sans: "DM Sans", system-ui, -apple-system, sans-serif;
-  --sidebar: 244px;
+  --sidebar: 264px;
   --shadow-sm: 0 1px 2px rgba(21, 25, 19, .04), 0 8px 28px rgba(21, 25, 19, .035);
   --shadow-lift: 0 18px 48px rgba(21, 25, 19, .10);
 }
@@ -1066,7 +1066,7 @@ main {
 .system-status .eyebrow { display: none; }
 .system-status p { margin: 0; color: #4d5540; font-size: 12px; }
 .system-status ul { grid-column: 2 / -1; margin: 3px 0 4px; font-size: 12px; }
-.status-toggle, .cancel-run {
+.status-toggle, .cancel-run, .theme-toggle {
   min-height: 38px;
   padding: 0 13px;
   border: 1px solid #cfd5c2;
@@ -1211,7 +1211,7 @@ textarea#score-text { min-height: 148px; padding: 15px 16px; border-color: #d8db
 }
 
 @media (max-width: 1180px) {
-  :root { --sidebar: 220px; }
+  :root { --sidebar: 244px; }
   main { padding-inline: 28px; }
   .feature-overview { grid-template-columns: minmax(0, 1.15fr) minmax(210px, .85fr); }
   .feature-primary { grid-row: span 2; }
@@ -1434,6 +1434,38 @@ textarea#score-text { min-height: 148px; padding: 15px 16px; border-color: #d8db
   .detail-facts { grid-template-columns: 1fr; }
   .detail-facts dt, .detail-facts dd { border-bottom: 0; }
   .detail-facts dd { padding-top: 0; border-bottom: 1px solid var(--rule); }
+}
+
+/* ------------------------------------------------------ rail alignment
+   The sidebar restyle above reuses the old top-bar rules for .rail-nav,
+   .mode-switch and .mode-tab, and three of them leaked. An unconstrained grid
+   track grows to its widest child: the mode switch (three nowrap labels plus an
+   18px margin meant for the top bar) made the track 273px inside a 208px
+   column, and every nav button stretched with it, so the active item's
+   background ran out over the main content. Keep this block after the legacy
+   breakpoints; it only works by coming last. */
+.rail-nav { grid-template-columns: minmax(0, 1fr); }
+.mode-switch { margin-right: 0; }
+/* Sized by label, not equal thirds: "Investigate" is 2.5x "Hunt" and clips at a third. */
+.mode-tab { flex: 1 1 auto; padding: 0 6px; letter-spacing: .02em; white-space: nowrap; }
+.tab { min-width: 0; }
+.tab span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.theme-toggle { color: var(--ink); cursor: pointer; }
+
+@media (max-width: 860px) {
+  /* One scrolling row beside the logo. The legacy 820/620px rules set
+     flex-wrap, which stacked the nav into three ragged rows. */
+  .rail { flex-wrap: nowrap; }
+  .rail-nav { display: flex; flex-wrap: nowrap; order: 0; width: auto; min-width: 0; align-items: center; }
+  .side-group { flex-wrap: nowrap; }
+  .side-group + .side-group { margin: 0; padding: 0; border: 0; }
+  .mode-switch { flex: 0 0 auto; margin-right: 8px; }
+  .mode-tab { flex: 0 0 auto; padding: 0 13px; }
+  .tab span { overflow: visible; }
+}
+@media (max-width: 600px) {
+  .rail-nav { width: 100%; }
+  .mode-tab { padding: 0 10px; }
 }
 
 /* ================================================================ themes */
