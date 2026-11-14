@@ -35,6 +35,21 @@
      results, not that those results carry full details. */
   const sourceBadge = (status) => `<span class="sx-badge sx-${esc(status)}">${esc(status === "ok" ? "results found" : (STATUS_LABEL[status] || status || "not asked"))}</span>`;
   const note = (el, msg, isError) => { el.textContent = msg; el.classList.toggle("sx-error", !!isError); el.hidden = !msg; };
+  const SOURCE_LABEL = { exa: "Exa", searxng: "SearXNG", duckduckgo: "DuckDuckGo" };
+  /* Which search this server is using, in order, and how the first one last answered. Shown
+     on both pages so "is my Exa key working?" has a visible answer. */
+  function orderLine(order, sources) {
+    if (!order || !order.length) return "";
+    const names = order.map((s) => SOURCE_LABEL[s] || s);
+    const first = (sources || []).find((s) => s.source === order[0]);
+    let line = order.length === 1
+      ? `Searching with ${names[0]} only. Set EXA_API_KEY or SEARXNG_URL on the server for better results.`
+      : `Searching with ${names[0]} first` + (names.length > 1 ? `, then ${names.slice(1).join(", then ")} only if it cannot answer.` : ".");
+    if (first && first.last_status && !["ok", "no_results", "not_found"].includes(first.last_status)) {
+      line += ` ${names[0]} last answered “${first.last_status}”: ${first.last_detail || ""}. Until that is fixed, results come from the fallback.`;
+    }
+    return line;
+  }
 
   /* The analyst's name is typed once and remembered on this device only. */
   function analyst() {
@@ -93,7 +108,9 @@
     const box = $s("#sx-hits");
     try {
       const d = await api(`/hits?review=${encodeURIComponent(state.review)}`);
-      note($s("#sx-status"), d.worker.running ? "" : d.worker.note, true);
+      const order = orderLine(d.search_order, d.sources);
+      const orderBad = !d.search_order || d.search_order.length === 1 || /last answered/.test(order);
+      note($s("#sx-status"), d.worker.running ? order : `${d.worker.note} ${order}`, !d.worker.running || orderBad);
       if (d.hits.length) {
         box.innerHTML = d.hits.map(hitCard).join("");
         return;
@@ -220,7 +237,8 @@
       if (!boxes.children.length) {
         boxes.innerHTML = w.platforms.map((p) => `<label class="sx-check"><input type="checkbox" value="${esc(p)}" checked> ${esc(PLATFORM_LABEL[p] || p)}</label>`).join("");
       }
-      note($s("#sw-status"), h.worker.running ? "" : h.worker.note, true);
+      const order = orderLine(h.search_order, h.sources);
+      note($s("#sw-status"), h.worker.running ? order : `${h.worker.note} ${order}`, !h.worker.running || /only|last answered/.test(order));
       $s("#sw-count").textContent = `${w.watchlist.length} term${w.watchlist.length === 1 ? "" : "s"}`;
       $s("#sw-list").innerHTML = w.watchlist.length ? w.watchlist.map((t) => `<article class="sx-watch${t.active ? "" : " sx-paused"}">
           <div><strong>${esc(t.term)}</strong> <span class="sx-muted">${t.match_type === "exact" ? "exact phrase" : "all the words"} · ${esc(t.platforms.map((p) => PLATFORM_LABEL[p] || p).join(", "))}${t.active ? "" : " · paused"}</span></div>
