@@ -13,6 +13,7 @@
 <noscript><link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Fira+Code:wght@400;500;600&display=swap" rel="stylesheet"></noscript>
 <link rel="stylesheet" href="/style.css">
 <link rel="stylesheet" href="/hunter.css">
+<link rel="stylesheet" href="/social.css">
 </head>
 <body>
 
@@ -35,6 +36,8 @@
       <span class="side-label">Monitor workspace</span>
       <button class="tab is-on" data-view="sweep" data-side="watchtower" aria-current="page"><svg viewBox="0 0 24 24" fill="none"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg><span>Monitor</span></button>
       <button class="tab" data-view="archive" data-side="watchtower"><svg viewBox="0 0 24 24" fill="none"><path d="M4 7h16v13H4zM3 4h18v3H3z"/><path d="M9 11h6"/></svg><span>Saved results</span></button>
+      <button class="tab" data-view="social" data-side="watchtower"><svg viewBox="0 0 24 24" fill="none"><path d="M4 5h16v11H9l-5 4z"/><path d="M8 9h8M8 12h5"/></svg><span>Social inbox</span></button>
+      <button class="tab" data-view="watchlist" data-side="watchtower"><svg viewBox="0 0 24 24" fill="none"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg><span>Watchlist</span></button>
     </div>
     <div class="side-group" data-side="scamscan">
       <span class="side-label">Investigation workspace</span>
@@ -221,6 +224,63 @@
     </p>
   </form>
   <div class="findings" id="archive-results"></div>
+</section>
+
+<!-- ========================= SOCIAL INBOX ========================= -->
+<section id="view-social" hidden>
+  <header class="view-head compact-head" tabindex="-1"><div><span class="eyebrow">Mnara / Social inbox</span>
+    <h1>Social inbox</h1>
+    <p>Posts and accounts found on Reddit, TikTok, X, Facebook and Instagram for your watchlist, and for any keyword, handle or link you search. Found through public search results; nothing is logged in to.</p></div></header>
+  <p class="hint warn-note" id="sx-status" hidden></p>
+  <form class="console" id="sx-search" autocomplete="off">
+    <label class="field-label" for="sx-query">Search now</label>
+    <div class="field">
+      <input id="sx-query" type="text" maxlength="300" spellcheck="false" placeholder="a keyword, an @handle, or a link to a post">
+      <button type="submit">Search</button>
+    </div>
+    <div class="sx-row">
+      <label class="sx-grow">Why are you searching?<input id="sx-purpose" type="text" maxlength="300" placeholder="e.g. customer reported a fake Fuliza page"></label>
+      <label>Your name<input id="sx-analyst" type="text" maxlength="100" autocomplete="name"></label>
+    </div>
+    <p class="hint">The reason is recorded with the search. Searches run in the background at a slow, polite pace: expect minutes, not seconds.</p>
+  </form>
+  <section class="sx-run" id="sx-run" hidden aria-live="polite"></section>
+  <div class="sx-toolbar">
+    <div class="sx-filters" id="sx-filters" role="group" aria-label="Show">
+      <button type="button" class="chip is-on" data-review="new" aria-pressed="true">New</button>
+      <button type="button" class="chip" data-review="relevant" aria-pressed="false">Relevant</button>
+      <button type="button" class="chip" data-review="escalated" aria-pressed="false">Escalated</button>
+      <button type="button" class="chip" data-review="dismissed" aria-pressed="false">Dismissed</button>
+      <button type="button" class="chip" data-review="all" aria-pressed="false">All</button>
+    </div>
+    <button type="button" class="secondary-button" id="sx-refresh">Refresh</button>
+  </div>
+  <div id="sx-hits" aria-live="polite"></div>
+</section>
+
+<!-- =========================== WATCHLIST =========================== -->
+<section id="view-watchlist" hidden>
+  <header class="view-head compact-head" tabindex="-1"><div><span class="eyebrow">Mnara / Watchlist</span>
+    <h1>Watchlist</h1>
+    <p>Terms Mnara searches for on a schedule. Anything it finds lands in the Social inbox.</p></div></header>
+  <p class="hint warn-note" id="sw-status" hidden></p>
+  <form class="console" id="sw-form" autocomplete="off">
+    <label class="field-label" for="sw-term">Add a term</label>
+    <div class="field">
+      <input id="sw-term" type="text" maxlength="80" spellcheck="false" placeholder="e.g. Fuliza limit increase">
+      <button type="submit">Add</button>
+    </div>
+    <div class="sx-row">
+      <label>Match<select id="sw-match"><option value="exact">exact phrase</option><option value="fuzzy">all the words, any order</option></select></label>
+      <label>Your name<input id="sw-analyst" type="text" maxlength="100" autocomplete="name"></label>
+    </div>
+    <div class="sx-platforms" id="sw-platforms" role="group" aria-label="Platforms"></div>
+  </form>
+  <div class="sx-toolbar"><span class="hint" id="sw-count"></span>
+    <button type="button" class="secondary-button" id="sw-run">Search the watchlist now</button></div>
+  <div id="sw-list" aria-live="polite"></div>
+  <h2 class="sx-h2">Source health</h2>
+  <div id="sw-health" aria-live="polite"></div>
 </section>
 
 <!-- ========================== DISCOVER ========================== -->
@@ -430,5 +490,6 @@
 
 <script src="/app.js"></script>
 <script src="/hunter.js"></script>
+<script src="/social.js"></script>
 </body>
 </html>

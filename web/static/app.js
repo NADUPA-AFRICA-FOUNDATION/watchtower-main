@@ -381,9 +381,9 @@ $("#reset-controls").onclick = resetMonitorControls;
 /* Two tools, one front door. The views are independent — nothing on the
    scamscan side reads watchtower's store and vice versa — so switching sides
    is only ever showing and hiding, never a state handover. */
-const VIEWS = ["sweep", "archive", "discover", "queue", "score", "hunt", "campaigns", "huntops"];
+const VIEWS = ["sweep", "archive", "social", "watchlist", "discover", "queue", "score", "hunt", "campaigns", "huntops"];
 const MODE_VIEWS = {
-  monitor: ["sweep", "archive"],
+  monitor: ["sweep", "archive", "social", "watchlist"],
   investigate: ["discover", "queue", "score"],
   hunt: ["hunt", "campaigns", "huntops"],
 };
@@ -430,6 +430,7 @@ document.querySelectorAll(".tab").forEach((tab) => {
     if (heading) heading.focus();
     if (tab.dataset.view === "queue") loadQueue();
     if (window.hunterOnView) window.hunterOnView(tab.dataset.view);
+    if (window.socialOnView) window.socialOnView(tab.dataset.view);
   };
 });
 

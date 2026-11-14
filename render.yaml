@@ -1,0 +1,57 @@
+# Render Blueprint. The app already recognises Render (RENDER is set by the platform), so off
+# localhost it fails closed until WATCHTOWER_PASSWORD is set in the service's environment.
+#
+# Storage: a Render web service's filesystem is wiped on every deploy and restart unless a
+# disk is attached, and disks are not available on the free plan. Until the data layer moves
+# off SQLite, saved results, the review queue and the hunter database do not survive a
+# restart here. Set WATCHTOWER_DATA_DIR to a mounted disk to keep them.
+#
+# Social discovery (Social inbox, Watchlist):
+#   * With CONVEX_URL and CONVEX_SERVER_KEY set on BOTH services, data lives in Convex, the
+#     `mnara-social-worker` service runs the queue, and convex/crons.ts schedules the
+#     watchlist and the daily purge.
+#   * Without them, data is a SQLite file inside the web service and the web process runs the
+#     queue itself; the worker service then has nothing it can share and should be removed.
+services:
+  - type: web
+    name: mnara
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn web.app:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/healthz
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.9"
+      - key: WATCHTOWER_PASSWORD
+        sync: false            # set in the Render dashboard; never committed
+      - key: WATCHTOWER_USER
+        value: watchtower
+      - key: EXA_API_KEY
+        sync: false            # optional, paid; set in the dashboard to add Exa to social discovery
+      - key: CONVEX_URL
+        sync: false            # https://<deployment>.convex.cloud
+      - key: CONVEX_SERVER_KEY
+        sync: false            # same value as MNARA_SERVER_KEY on the Convex deployment
+
+  - type: worker
+    name: mnara-social-worker
+    runtime: python
+    plan: starter              # Render background workers are a paid service type
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m social.worker
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.9"
+      - key: CONVEX_URL
+        sync: false
+      - key: CONVEX_SERVER_KEY
+        sync: false
+      - key: EXA_API_KEY
+        sync: false
+      - key: SOCIAL_RETENTION_DAYS
+        value: "90"
+      - key: SOCIAL_DISMISSED_RETENTION_DAYS
+        value: "7"

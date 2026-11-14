@@ -20,12 +20,13 @@ import os
 import queue
 import secrets
 import threading
+from datetime import datetime, timezone
 from dataclasses import asdict
 from pathlib import Path
 
 import yaml
 from fastapi import Body, FastAPI, HTTPException, Query, Request
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.gzip import GZipMiddleware
 
@@ -293,6 +294,48 @@ def list_sources():
         "ephemeral_storage": EPHEMERAL,
         "zero_key_mode": not any(os.environ.get(key) for key in BACKEND_KEYS.values()),
     }
+
+
+# One run at a time, kept in memory: the matrix is a diagnostic about THIS instance's network
+# position, so there is nothing to persist and a restart simply means "run it again".
+_MATRIX: dict = {"state": "idle", "result": None, "error": "", "started": ""}
+_MATRIX_LOCK = threading.Lock()
+
+
+def _run_source_matrix(term: str) -> None:
+    from social.spike import run_matrix
+    try:
+        result = run_matrix(term)
+        with _MATRIX_LOCK:
+            _MATRIX.update(state="done", result=result)
+    except Exception as exc:                                       # noqa: BLE001 - shown to the operator
+        with _MATRIX_LOCK:
+            _MATRIX.update(state="failed", error=f"{type(exc).__name__}: {exc}")
+
+
+@app.get("/api/admin/source-matrix", response_class=PlainTextResponse)
+def source_matrix(fresh: bool = False, term: str = Query("Fuliza", min_length=2, max_length=60), format: str = "markdown"):
+    """Which keyless social sources answer from this deployment (Phase 1 feasibility spike).
+
+    Open it in a browser on the deployed instance: the first visit starts the run and the
+    page refreshes itself until the matrix is ready (two to four minutes; the requests are
+    paced). It sits behind the same password as everything else because each run sends about
+    forty outbound requests. `?fresh=1` runs it again.
+    """
+    with _MATRIX_LOCK:
+        if _MATRIX["state"] == "idle" or (fresh and _MATRIX["state"] != "running"):
+            _MATRIX.update(state="running", result=None, error="", started=datetime.now(timezone.utc).isoformat(timespec="seconds"))
+            threading.Thread(target=_run_source_matrix, args=(term,), daemon=True).start()
+        state = dict(_MATRIX)
+    if state["state"] == "running":
+        return PlainTextResponse(f"Running since {state['started']} UTC. This page refreshes every 10 seconds.\n",
+                                 status_code=202, headers={"Refresh": "10"})
+    if state["state"] == "failed":
+        return PlainTextResponse(f"The run failed: {state['error']}\nAdd ?fresh=1 to try again.\n", status_code=500)
+    if format == "json":
+        return JSONResponse(state["result"])
+    from social.spike import to_markdown
+    return to_markdown(state["result"])
 
 
 @app.get("/api/system/health")
@@ -1286,6 +1329,49 @@ def _analyst_identity(request: Request, claimed: str) -> tuple[str, str]:
 from web.hunter_routes import build_router  # noqa: E402  (kept next to the mount: routes must precede it)
 
 app.include_router(build_router(lambda: data_path("hunter.db"), _hunter_config, _analyst_identity, lambda: EPHEMERAL))
+
+# ---------------------------------------------------------------- social discovery
+# One store per process, opened on first use. With CONVEX_URL set it is shared with a separate
+# worker service; otherwise it is a SQLite file here, and the worker has to live in this
+# process (below) because another service could not see the file.
+_SOCIAL: dict = {"store": None, "worker": None}
+_SOCIAL_LOCK = threading.Lock()
+
+
+def _social_store():
+    with _SOCIAL_LOCK:
+        if _SOCIAL["store"] is None:
+            from social.store import open_store
+            _SOCIAL["store"] = open_store(DATA_DIR)
+        return _SOCIAL["store"]
+
+
+from web.social_routes import build_router as build_social_router  # noqa: E402
+
+app.include_router(build_social_router(_social_store, _analyst_identity))
+
+
+@app.on_event("startup")
+def _start_social_worker() -> None:
+    """Run the queue inside the web process when nothing else can.
+
+    Skipped on serverless hosts (no process outlives a request), when a separate worker shares
+    the data through Convex, and when SOCIAL_INLINE_WORKER=0. In those cases /api/social/status
+    reports that no worker is running rather than letting a search sit silently in the queue.
+    """
+    setting = os.environ.get("SOCIAL_INLINE_WORKER", "").strip().lower()
+    if SERVERLESS or setting in {"0", "false", "off", "no"}:
+        return
+    store = _social_store()
+    if store.shared and setting not in {"1", "true", "on", "yes"}:
+        return
+    from social.pipeline import Engine
+    from social.worker import run
+    stop = threading.Event()
+    thread = threading.Thread(target=run, args=(Engine(store), stop), daemon=True, name="social-worker")
+    thread.start()
+    _SOCIAL["worker"] = (thread, stop)
+
 
 class _RevalidatingStatic(StaticFiles):
     """Static files carry an ETag already; `no-cache` makes the browser revalidate (a 304, no body) instead of

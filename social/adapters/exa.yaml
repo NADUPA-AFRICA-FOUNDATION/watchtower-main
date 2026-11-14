@@ -1,0 +1,23 @@
+# Exa search API: optional, paid, OFF unless EXA_API_KEY is set. The zero-budget brief allows a
+# keyed source only as an opt-in that the system works without, so DuckDuckGo stays the default
+# and Exa is added beside it, never in place of it.
+#
+# Request shape follows Exa's own guidance (build-with-exa skill): query, type auto, and
+# highlights for content, nothing else, except
+#   includeDomains  the brief requires discovery per platform, which is a hard domain allowlist
+#   objective       each search is one step of a pipeline, so it says what the search is for
+name: exa
+key_env: EXA_API_KEY
+endpoint: "https://api.exa.ai/search"
+query_template: '"{term}"'
+objective: >-
+  Find public posts, profiles, groups or videos on this social platform that mention the
+  watched term, for fraud and scam monitoring. Rank first the posts and accounts themselves,
+  including ones offering, selling or advertising services under the term; exclude news
+  articles about the platform and pages that only list or aggregate other posts. Pull the
+  post's own words, its author or account name, and its publication date.
+min_interval_seconds: 1
+# Results are cached for six hours: a watchlist re-run inside that window costs nothing.
+cache_ttl_seconds: 21600
+rate_limited_status: [429]
+blocked_status: [401, 402, 403]
