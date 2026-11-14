@@ -46,8 +46,9 @@ def _db_path() -> str:
 
 
 async def _discover(args, cfg) -> int:
+    from .providers.nrd import NewlyRegisteredProvider
     providers: dict = {"permutation": lambda: PermutationProvider(force=args.force),
-                       "ct": CertificateTransparencyProvider}
+                       "ct": CertificateTransparencyProvider, "nrd": NewlyRegisteredProvider}
     if args.provider not in providers:
         print(f"unknown provider: {args.provider} (choose: {', '.join(providers)})", file=sys.stderr)
         return 2

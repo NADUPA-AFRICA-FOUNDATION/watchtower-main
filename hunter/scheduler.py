@@ -58,6 +58,7 @@ class Services:
     ct: Any = None
     permutation: Any = None
     search_discovery: Any = None
+    newly_registered: Any = None
     alerts: Any = None
     closers: list = field(default_factory=list)
 
@@ -118,7 +119,8 @@ class Scheduler:
                 ("certificate_transparency", sc.ct_minutes * 60, sv.ct, c.ct.enabled),
                 ("permutation", sc.permutation_hours * 3600, sv.permutation, c.permutations.enabled),
                 ("search_discovery", sc.search_discovery_hours * 3600, sv.search_discovery,
-                 c.search_discovery.enabled and c.pivots.search)):
+                 c.search_discovery.enabled and c.pivots.search),
+                ("newly_registered", sc.newly_registered_hours * 3600, sv.newly_registered, c.newly_registered.enabled)):
             if provider is not None:
                 jobs.append(Job(name, interval, partial(self._discover, provider), name, enabled))
         jobs.append(Job("enrich", sc.enrich_seconds, self._enrich))

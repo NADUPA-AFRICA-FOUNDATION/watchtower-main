@@ -15,6 +15,7 @@ from .enrich.rdap import RdapClient
 from .enrich.threat import ThreatFeeds
 from .enrich.tls import TlsEnricher
 from .providers.ct import CertificateTransparencyProvider
+from .providers.nrd import NewlyRegisteredProvider
 from .providers.permutation import PermutationProvider
 from .providers.search_discovery import SearchDiscoveryProvider
 from .ratelimit import RateLimiter
@@ -41,9 +42,10 @@ def build_services(cfg, db_path: str, *, require_persistent: bool = False) -> Se
                         Enrichers(system_lookup(e.dns_timeout_seconds), rdap, TlsEnricher(e.tls_timeout_seconds), acquire, searcher, reverse, threat))
     sv = Services(store, graph, ctx, CertificateTransparencyProvider(), PermutationProvider(),
                   alerts=AlertEngine(store, graph, cfg))
+    sv.newly_registered = NewlyRegisteredProvider(user_agent=user_agent())
     if searcher is not None:
         sv.search_discovery = SearchDiscoveryProvider(
             searcher, queries_available=lambda: pc.max_search_queries_per_day - len(store.search_events_24h()),
             on_query=lambda q: store.log_event("system:search", "discovery_search", q))
-    sv.closers = [http.aclose, acquire.close, sv.ct.close] + ([searcher.close] if searcher else []) + ([reverse.close] if reverse else []) + ([threat.close] if threat else [])
+    sv.closers = [http.aclose, acquire.close, sv.ct.close, sv.newly_registered.close] + ([searcher.close] if searcher else []) + ([reverse.close] if reverse else []) + ([threat.close] if threat else [])
     return sv

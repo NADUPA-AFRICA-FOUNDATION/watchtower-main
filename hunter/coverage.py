@@ -12,6 +12,7 @@ SOURCES = (
     ("certificate_transparency", "discovery", "ct.enabled"),
     ("permutation", "discovery", "permutations.enabled"),
     ("search_discovery", "discovery", "search_discovery.enabled"),
+    ("newly_registered", "discovery", "newly_registered.enabled"),
     ("dns", "enrichment", None), ("rdap", "enrichment", None), ("tls", "enrichment", None), ("http", "enrichment", None),
     ("threat_feeds", "enrichment", "enrichment.threat_feeds"),
     ("search", "pivot", "pivots.search"), ("reverse_ip", "pivot", "pivots.reverse_ip"),
