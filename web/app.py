@@ -20,12 +20,13 @@ import os
 import queue
 import secrets
 import threading
+from datetime import datetime, timezone
 from dataclasses import asdict
 from pathlib import Path
 
 import yaml
 from fastapi import Body, FastAPI, HTTPException, Query, Request
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.gzip import GZipMiddleware
 
@@ -293,6 +294,48 @@ def list_sources():
         "ephemeral_storage": EPHEMERAL,
         "zero_key_mode": not any(os.environ.get(key) for key in BACKEND_KEYS.values()),
     }
+
+
+# One run at a time, kept in memory: the matrix is a diagnostic about THIS instance's network
+# position, so there is nothing to persist and a restart simply means "run it again".
+_MATRIX: dict = {"state": "idle", "result": None, "error": "", "started": ""}
+_MATRIX_LOCK = threading.Lock()
+
+
+def _run_source_matrix(term: str) -> None:
+    from social.spike import run_matrix
+    try:
+        result = run_matrix(term)
+        with _MATRIX_LOCK:
+            _MATRIX.update(state="done", result=result)
+    except Exception as exc:                                       # noqa: BLE001 - shown to the operator
+        with _MATRIX_LOCK:
+            _MATRIX.update(state="failed", error=f"{type(exc).__name__}: {exc}")
+
+
+@app.get("/api/admin/source-matrix", response_class=PlainTextResponse)
+def source_matrix(fresh: bool = False, term: str = Query("Fuliza", min_length=2, max_length=60), format: str = "markdown"):
+    """Which keyless social sources answer from this deployment (Phase 1 feasibility spike).
+
+    Open it in a browser on the deployed instance: the first visit starts the run and the
+    page refreshes itself until the matrix is ready (two to four minutes; the requests are
+    paced). It sits behind the same password as everything else because each run sends about
+    forty outbound requests. `?fresh=1` runs it again.
+    """
+    with _MATRIX_LOCK:
+        if _MATRIX["state"] == "idle" or (fresh and _MATRIX["state"] != "running"):
+            _MATRIX.update(state="running", result=None, error="", started=datetime.now(timezone.utc).isoformat(timespec="seconds"))
+            threading.Thread(target=_run_source_matrix, args=(term,), daemon=True).start()
+        state = dict(_MATRIX)
+    if state["state"] == "running":
+        return PlainTextResponse(f"Running since {state['started']} UTC. This page refreshes every 10 seconds.\n",
+                                 status_code=202, headers={"Refresh": "10"})
+    if state["state"] == "failed":
+        return PlainTextResponse(f"The run failed: {state['error']}\nAdd ?fresh=1 to try again.\n", status_code=500)
+    if format == "json":
+        return JSONResponse(state["result"])
+    from social.spike import to_markdown
+    return to_markdown(state["result"])
 
 
 @app.get("/api/system/health")
