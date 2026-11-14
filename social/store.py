@@ -239,7 +239,7 @@ class SQLiteStore:
     def audit_list(self, limit: int = 50) -> list[dict]:
         return [{"user": r["user"], "action": r["action"], "query": r["query"], "sources_used": json.loads(r["sources_used"]),
                  "purpose": r["purpose"], "at": r["at"]}
-                for r in self._all("SELECT * FROM social_audit ORDER BY at DESC LIMIT ?", (max(1, min(int(limit), 500)),))]
+                for r in self._all("SELECT * FROM social_audit ORDER BY at DESC, rowid DESC LIMIT ?", (max(1, min(int(limit), 500)),))]
 
     # --------------------------------------------------------------- source health
 

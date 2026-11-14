@@ -1330,6 +1330,49 @@ from web.hunter_routes import build_router  # noqa: E402  (kept next to the moun
 
 app.include_router(build_router(lambda: data_path("hunter.db"), _hunter_config, _analyst_identity, lambda: EPHEMERAL))
 
+# ---------------------------------------------------------------- social discovery
+# One store per process, opened on first use. With CONVEX_URL set it is shared with a separate
+# worker service; otherwise it is a SQLite file here, and the worker has to live in this
+# process (below) because another service could not see the file.
+_SOCIAL: dict = {"store": None, "worker": None}
+_SOCIAL_LOCK = threading.Lock()
+
+
+def _social_store():
+    with _SOCIAL_LOCK:
+        if _SOCIAL["store"] is None:
+            from social.store import open_store
+            _SOCIAL["store"] = open_store(DATA_DIR)
+        return _SOCIAL["store"]
+
+
+from web.social_routes import build_router as build_social_router  # noqa: E402
+
+app.include_router(build_social_router(_social_store, _analyst_identity))
+
+
+@app.on_event("startup")
+def _start_social_worker() -> None:
+    """Run the queue inside the web process when nothing else can.
+
+    Skipped on serverless hosts (no process outlives a request), when a separate worker shares
+    the data through Convex, and when SOCIAL_INLINE_WORKER=0. In those cases /api/social/status
+    reports that no worker is running rather than letting a search sit silently in the queue.
+    """
+    setting = os.environ.get("SOCIAL_INLINE_WORKER", "").strip().lower()
+    if SERVERLESS or setting in {"0", "false", "off", "no"}:
+        return
+    store = _social_store()
+    if store.shared and setting not in {"1", "true", "on", "yes"}:
+        return
+    from social.pipeline import Engine
+    from social.worker import run
+    stop = threading.Event()
+    thread = threading.Thread(target=run, args=(Engine(store), stop), daemon=True, name="social-worker")
+    thread.start()
+    _SOCIAL["worker"] = (thread, stop)
+
+
 class _RevalidatingStatic(StaticFiles):
     """Static files carry an ETag already; `no-cache` makes the browser revalidate (a 304, no body) instead of
     guessing a freshness window, so edits still show immediately and repeat loads cost almost nothing."""
