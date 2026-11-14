@@ -29,7 +29,9 @@ services:
       - key: WATCHTOWER_USER
         value: watchtower
       - key: EXA_API_KEY
-        sync: false            # optional, paid; set in the dashboard to add Exa to social discovery
+        sync: false            # optional, paid; when set, the first search source asked
+      - key: SEARXNG_URL
+        sync: false            # optional, free; your SearXNG instance, asked before DuckDuckGo
       - key: CONVEX_URL
         sync: false            # https://<deployment>.convex.cloud
       - key: CONVEX_SERVER_KEY
@@ -50,6 +52,8 @@ services:
       - key: CONVEX_SERVER_KEY
         sync: false
       - key: EXA_API_KEY
+        sync: false
+      - key: SEARXNG_URL
         sync: false
       - key: SOCIAL_RETENTION_DAYS
         value: "90"
