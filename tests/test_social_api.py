@@ -130,3 +130,17 @@ def test_the_app_mounts_the_routes_and_the_page_wires_every_element_the_script_u
     for status in ("ok", "partial", "snippet_only", "blocked", "rate_limited", "no_results", "not_found", "queued"):
         assert f".sx-{status}" in css, status
     assert "innerHTML" in js and js.count("esc(") > 40                                               # everything rendered is escaped
+
+
+def test_pages_say_which_search_is_used_and_label_waiting_rows_with_it(monkeypatch):
+    monkeypatch.delenv("SEARXNG_URL", raising=False)
+    monkeypatch.delenv("EXA_API_KEY", raising=False)
+    client, store, clock, worker = setup()
+    assert client.get("/api/social/hits").json()["search_order"] == ["duckduckgo"]
+    monkeypatch.setenv("EXA_API_KEY", "exa_test")
+    assert client.get("/health/social").json()["search_order"] == ["exa", "duckduckgo"]
+    assert client.get("/api/social/status").json()["discovery"] == ["exa", "duckduckgo"]
+    r = client.post("/api/social/search", json={"query": "Safaricom", "purpose": "customer report", "analyst": "Amina", "platforms": ["x"]})
+    run = client.get(r.json()["poll"]).json()
+    assert run["search_order"] == ["exa", "duckduckgo"]
+    assert [(o["source"], o["status"]) for o in run["outcomes"]] == [("exa", "queued")]          # not "duckduckgo"

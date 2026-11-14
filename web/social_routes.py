@@ -16,7 +16,7 @@ from typing import Callable, Optional
 from fastapi import APIRouter, Body, HTTPException, Query, Request
 
 from social.adapters import load_config
-from social.pipeline import DISCOVERY_SOURCE, ENRICHERS, ENRICHMENT_NOTE, Engine, discovery_sources
+from social.pipeline import ENRICHERS, ENRICHMENT_NOTE, Engine, discovery_sources
 from social.schema import PLATFORMS, REVIEW_STATUSES
 
 _ID = re.compile(r"^[A-Za-z0-9_|:.\-]{1,120}$")
@@ -63,6 +63,11 @@ def build_router(get_store: Callable[[], object], identity: Callable[[Request, s
             raise HTTPException(400, f"platforms must be a list from: {', '.join(PLATFORMS)}")
         return list(dict.fromkeys(value))
 
+    def search_order() -> list:
+        """The discovery sources this process will ask, best first. Read on every request, so a key
+        added in the host's settings shows here as soon as the service has restarted with it."""
+        return [a.SOURCE for a in discovery_sources()]
+
     def worker_state(store) -> dict:
         beat = int(store.kv_get("worker_heartbeat") or 0)
         alive = bool(beat and clock() - beat < WORKER_STALE_MS)
@@ -77,17 +82,19 @@ def build_router(get_store: Callable[[], object], identity: Callable[[Request, s
         for o in run["outcomes"]:
             latest[(o["platform"], o["source"])] = o          # the most recent attempt per source is the current truth
         asked = {p for p, _ in latest}
-        waiting = [{"platform": p, "source": DISCOVERY_SOURCE, "status": "queued", "detail": "not asked yet", "count": 0, "at": None}
+        # Label a not-yet-asked platform with the source that will actually be asked first.
+        first = discovery_sources()[0].SOURCE
+        waiting = [{"platform": p, "source": first, "status": "queued", "detail": "not asked yet", "count": 0, "at": None}
                    for p in run["platforms"] if p not in asked]
         hits = store.hits_list(run_id=run_id, limit=200)
         return _times({**run, "outcomes": list(latest.values()) + waiting, "state": "running" if run["pending_jobs"] else "finished",
-                       "hits": hits, "worker": worker_state(store)})
+                       "hits": hits, "worker": worker_state(store), "search_order": search_order()})
 
     @router.get("/api/social/status")
     def status():
         store = get_store()
         return {"storage": store.backend, "worker": worker_state(store), "pending_jobs": store.jobs_pending(),
-                "discovery": [a.SOURCE for a in discovery_sources()],
+                "discovery": search_order(),
                 "platforms": {p: {"discovery": "search-engine snippets",
                                   "details": (ENRICHERS[p].SOURCE if p in ENRICHERS and load_config(ENRICHERS[p].SOURCE).get("enabled")
                                               else None),
@@ -100,6 +107,7 @@ def build_router(get_store: Callable[[], object], identity: Callable[[Request, s
         store = get_store()
         sources = store.source_health(clock())
         return {"checked_at": _iso(clock()), "worker": worker_state(store), "pending_jobs": store.jobs_pending(),
+                "search_order": search_order(),
                 "sources": _times(sources),
                 "note": "" if sources else "No source has been asked yet, so there is nothing to report. This is not a healthy reading."}
 
@@ -112,6 +120,7 @@ def build_router(get_store: Callable[[], object], identity: Callable[[Request, s
         store = get_store()
         rows = store.hits_list(review_status=None if review == "all" else review, platform=platform or None, limit=limit)
         return {"hits": _times(rows), "count": len(rows), "worker": worker_state(store), "pending_jobs": store.jobs_pending(),
+                "search_order": search_order(),
                 "sources": _times(store.source_health(clock()))}
 
     @router.post("/api/social/hits/{hit_id}/review")
