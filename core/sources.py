@@ -304,9 +304,24 @@ _BAIT_SHAPES = {
     "guarantee_claims": r"\b(?:guarantee[ds]?|100\s*%\s*(?:working|sure|legit))\b",
     "contact_funnel": r"\b(?:hit|dm|inbox|message|whatsapp)\s+(?:the\s+|our\s+|my\s+)?(?:admin|agent)\b",
     "advance_fee": r"\b(?:pre-?pay|upfront|ready with the charges)\b",
-    "urgency_pressure": r"\b(?:slots?\s+(?:almost|are)\s+full|hurry|limited\s+(?:slots|time)|apply\s+now"
+    "urgency_pressure": r"\b(?:slots?\s+(?:almost|are)\s+full|hurry|limited\s+(?:slots|time)|apply\s+now|don'?t be left out|do not be left out"
                         r"|within\s+\d+\s*(?:-\s*\d+\s*)?min(?:ute)?s?|1\s*[\u2013-]\s*2\s*minutes)\b",
     "link_hosting": r"\b[\w-]+\.(?:vercel\.app|netlify\.app|pages\.dev|blogspot\.com|weebly\.com|wixsite\.com)\b",
+    # The payment always moves to a personal channel: a Kenyan mobile number, a WhatsApp link with a
+    # number in it, or a Till/Paybill number. The real brand never asks customers to pay or message
+    # a personal number, so next to the scam's subject this is enough by itself.
+    "personal_contact": r"(?<![\d])(?:\+?254|0)[\s-]?[17]\d{2}[\s-]?\d{3}[\s-]?\d{3}(?!\d)"
+                        r"|\bwa\.me/\+?\d{9,15}"
+                        r"|\b(?:till|paybill|pay\s*bill|buy\s*goods)\s*(?:no\.?|number|#)?\s*:?\s*\d{5,7}\b"
+                        r"|\b(?:call|text|sms|whatsapp)\s+(?:me|us)\s+on\b",
+    # Offering the service to whoever wants it, without naming a fee: how a lure reads when its
+    # author has learned which fee words get reported.
+    "solicitation": r"\b(?:do you (?:need|want)|those who (?:want|need)|(?:any ?one|anybody) (?:who )?(?:wants?|needs?)"
+                    r"|contact (?:me |us )?for|(?:dm|inbox|message|text|call|whatsapp) (?:me |us )?for"
+                    r"|serious (?:clients|people|customers) only|strictly for"
+                    r"|(?:boost|increment|increase|upgrade|loans?)\s+(?:is |are )?(?:now )?available"
+                    r"|legit (?:service|agent|fuliza|loan|increment|boost)"
+                    r"|provide (?:the |your )?(?:correct )?details|send (?:me )?your (?:details|number|id))\b",
 }
 _ADVISORY = re.compile(r"\b(?:scam(?:s|mers?)?|fake|fraud(?:ulent|sters?)?|hoax|beware|warning|fact[- ]?check|"
                        r"don'?t (?:be )?(?:conned|fall)|safaricom (?:warns|says|clarif)|"
@@ -321,24 +336,36 @@ def _bait_signals(*texts: str) -> tuple[list[str], bool]:
 
 
 def _bait_analysis(*texts: str) -> tuple[list[str], dict[str, list[str]], bool]:
-    """(families hit, phrases per family, advisory). The phrases are kept so a score can be defended."""
+    """(families hit, phrases per family, advisory). The phrases are kept so a score can be defended.
+
+    Matching runs on the de-obfuscated text and its digit-decoded reading (core/deobfuscate.py),
+    so "F.u.l.i.z.a" and "Fuliz@" are read as Fuliza; the union of both readings counts."""
+    from core.deobfuscate import variants
     from core.fraud_lexicon import match
-    blob = " ".join(t for t in texts if t)
-    if _ADVISORY.search(blob):
+    readings = variants(" ".join(t for t in texts if t))
+    if any(_ADVISORY.search(r) for r in readings):
         return [], {}, True
-    terms = match(blob)
-    for family, rx in _BAIT_SHAPE_RE.items():
-        hit = [m.group(0).lower() for m in rx.finditer(blob)]
-        if hit:
-            terms[family] = sorted(set(terms.get(family, [])) | set(hit))
-    return sorted(terms), terms, False
+    terms: dict[str, set] = {}
+    for blob in readings:
+        for family, hits in match(blob).items():
+            terms.setdefault(family, set()).update(hits)
+        for family, rx in _BAIT_SHAPE_RE.items():
+            hit = {m.group(0).lower().strip() for m in rx.finditer(blob)}
+            if hit:
+                terms.setdefault(family, set()).update(hit)
+    out = {k: sorted(v) for k, v in terms.items()}
+    return sorted(out), out, False
 
 
 _TITLE_TAIL = re.compile(r"\s*(?:[-|\u2022\u2013]\s*(?:facebook|tiktok|instagram|telegram|youtube|x)\b.*"
                          r"|\(@[^)]*\).*|\u2022\s*follow.*|/\s*x\s*$|on (?:x|instagram|tiktok)\b.*)$", re.I)
 _SNIPPET_ACCOUNT = re.compile(r"(?:comments?\s*-\s*([\w. ]{3,40}?)\s+on\s+[A-Z][a-z]+\s+\d"
-                              r"|video from\s+([^(]{3,40}?)\s*\(@\s*([\w.]+)\s*\))")
+                              r"|video from\s+([^(]{3,40}?)\s*\(@\s*([\w.]+)\s*\)"
+                              # A Telegram invite page names the channel only in its text.
+                              r"|invited to (?:the |join the )?(?:channel|group)\s+([^.\n]{3,60}?)(?:[.!\n]|\s+click\b)"
+                              r"|view and join\s+(?!@)([^\n]{3,80}?)\s+right away)", re.I)
 _POST_PATHS = {"posts", "videos", "video", "photo", "reel", "reels", "status", "watch", "permalink"}
+_POST_ROOTS = {"p", "reel", "tv", "watch", "i", "story.php", "permalink.php", "photo.php", "share"}
 
 
 def _lure_identity(platform: str, path: str, kind: str, title: str, text: str) -> str:
@@ -349,7 +376,8 @@ def _lure_identity(platform: str, path: str, kind: str, title: str, text: str) -
     while a page NAMED "Fuliza Limit Increase" is the thing Safaricom says cannot exist.
     Returns the matched identity ('' if none) so a reviewer can see why it fired.
     """
-    from core.fraud_lexicon import IDENTITY_BRANDS, IDENTITY_SERVICES, OFFICIAL_HANDLES
+    from core.fraud_lexicon import (IDENTITY_AMOUNT, IDENTITY_BRANDS, IDENTITY_LEGIT_PAIRS, IDENTITY_OFFER_BIO,
+                                    IDENTITY_SERVICES, OFFICIAL_HANDLES)
     if kind == "topic_page" or platform == "youtube.com":
         return ""
     parts = [p for p in path.split("/") if p]
@@ -359,7 +387,8 @@ def _lure_identity(platform: str, path: str, kind: str, title: str, text: str) -
     first = parts[0].lstrip("@")
     if first.lower() in OFFICIAL_HANDLES:
         return ""
-    is_post = any(p in _POST_PATHS for p in parts[1:]) or first in {"p", "reel", "tv", "watch", "i"} and platform != "facebook.com"
+    # facebook.com/p/<name> is a page, but facebook.com/watch/?v=... and /story.php are posts.
+    is_post = any(p in _POST_PATHS for p in parts[1:]) or (first in _POST_ROOTS and not (platform == "facebook.com" and first == "p"))
     if platform == "facebook.com":
         slug = parts[1] if first in {"p", "public", "people"} and len(parts) > 1 else first
         if first != "groups" and not slug.isdigit() and slug != "profile.php":
@@ -372,12 +401,25 @@ def _lure_identity(platform: str, path: str, kind: str, title: str, text: str) -
     m = _SNIPPET_ACCOUNT.search(text or "")
     if m:
         names.extend(g for g in m.groups() if g)
+    from core.deobfuscate import squeeze, variants
     for name in names:
-        compact = re.sub(r"[^a-z0-9]", "", name.lower())
-        if compact in OFFICIAL_HANDLES or len(compact) > 60:
-            continue
-        if any(b in compact for b in IDENTITY_BRANDS) and any(sv in compact for sv in IDENTITY_SERVICES):
-            return name.strip()[:80]
+        for reading in variants(name):
+            compact = re.sub(r"[^a-z0-9]", "", reading.lower())
+            if compact in OFFICIAL_HANDLES or len(compact) > 60:
+                break
+            # Brand checked with repeated letters squeezed too ("fulizza", "mpessa"); service words
+            # are not squeezed, because "boost" and "support" have doubled letters of their own.
+            brands = [b for b in IDENTITY_BRANDS if b in compact or b in squeeze(compact)]
+            if not brands:
+                continue
+            services = [sv for sv in IDENTITY_SERVICES if sv in compact
+                        and not all((b, sv) in IDENTITY_LEGIT_PAIRS for b in brands)]
+            if services or re.search(IDENTITY_AMOUNT, compact):
+                return name.strip()[:80]
+            # An account named for the brand whose own bio sells the service ("Click on the link
+            # below to Apply", "Huster fund increment"). Accounts only: a post's text is not a bio.
+            if not is_post and re.search(IDENTITY_OFFER_BIO, (text or "").lower()):
+                return name.strip()[:80]
     return ""
 
 
@@ -417,6 +459,7 @@ _FAMILY_PLAIN = {
     "link_hosting": "links to a throwaway website", "swahili": "uses known scam wording (Kiswahili)",
     "sheng": "uses known scam wording (Sheng)", "betting_fixed_match": "sells 'sure' betting tips",
     "emotional_pretext": "uses an emergency story", "fake_support_charity": "asks for donations to a personal number",
+    "personal_contact": "gives a personal phone, WhatsApp or Till number", "solicitation": "offers the service to anyone who wants it",
 }
 _TG_POST = re.compile(r'<div class="tgme_widget_message_text[^"]*"[^>]*>(.*?)</div>', re.S)
 _TG_SUBS = re.compile(r'<span class="counter_value">([^<]+)</span>\s*<span class="counter_type">subscribers?', re.I)
@@ -430,9 +473,30 @@ def behavioural_signals(meta: dict) -> list[str]:
     return [b for b in (meta.get("bait_signals") or []) if b not in SUBJECT_FAMILIES]
 
 
+# Signals that, next to the scam's own subject ("fuliza limit increase"), are enough on their own:
+# a third party offering the service and asking for money, a code, a private chat or a personal
+# number. Weaker signals (urgency, success stories, throwaway hosting) still need a second one.
+STRONG_WITH_SUBJECT = frozenset({"personal_contact", "solicitation", "advance_fee", "credential_theft", "contact_funnel"})
+# Families that real brand activity and news about it also produce: never a lure verdict together.
+WEAK_FAMILIES = frozenset({"impersonation", "prize_giveaway", "urgency_pressure", "fake_social_proof", "swahili", "sheng"})
+
+
 def is_likely_lure(meta: dict) -> bool:
-    """The one rule behind `likely_lure`, the score boost and the verdict, so they cannot disagree."""
-    return bool(meta.get("lure_identity")) or len(behavioural_signals(meta)) >= 2
+    """The one rule behind `likely_lure`, the score boost and the verdict, so they cannot disagree.
+
+    Any of: the account is named for the scam; two behavioural signals agree; or the scam's
+    subject appears together with one strong signal. Warnings about scams never count."""
+    from core.fraud_lexicon import SUBJECT_FAMILIES
+    if meta.get("advisory"):
+        return False
+    behav = behavioural_signals(meta)
+    subject = bool(set(meta.get("bait_signals") or []) & SUBJECT_FAMILIES)
+    strong = set(behav) & STRONG_WITH_SUBJECT
+    # Two weak signals agreeing is not enough on their own when both are things ordinary coverage
+    # of a real promotion also says ("Safaricom promotion", "winner"). With the scam's subject
+    # beside them ("boosted from KSh 500 to 50,000, apply now") they are.
+    weak_pair_only = set(behav) <= WEAK_FAMILIES
+    return bool(meta.get("lure_identity")) or (len(behav) >= 2 and (subject or not weak_pair_only)) or (subject and bool(strong))
 
 
 def social_verdict(meta: dict) -> dict:
