@@ -101,3 +101,13 @@ def test_naming_tricks_and_weak_pairs_found_on_unseen_data():
     # ...but success stories and urgency beside the scam's subject are a lure.
     assert lure("Fuliza Increment", "From KSh 500 to over KSh 50,000! Thousands of Kenyans have already boosted. Apply now",
                 platform="instagram.com", path="/p/DZE7Aw3ABeH/")
+
+
+def test_the_label_people_read_agrees_with_the_lure_flag():
+    from core.sources import social_verdict
+    meta = {"bait_signals": ["loan_limit_boost", "personal_contact"]}       # "boost your Fuliza, call 07..."
+    assert is_likely_lure(meta) and social_verdict(meta)["level"] == "lure"
+    weak = {"bait_signals": ["loan_limit_boost", "urgency_pressure"]}
+    assert not is_likely_lure(weak) and social_verdict(weak)["level"] == "check"
+    promo = {"bait_signals": ["impersonation", "prize_giveaway"]}           # real promotion coverage
+    assert not is_likely_lure(promo) and social_verdict(promo)["level"] != "lure"

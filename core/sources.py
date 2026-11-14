@@ -640,7 +640,9 @@ def social_verdict(meta: dict) -> dict:
         if plain:
             why += " It also " + ", ".join(plain) + "."
         return out("lure", "Likely scam account", why, "Do not pay or share a PIN or code. Report it to the real company.")
-    if len(behav) >= 2:
+    # Same rule as is_likely_lure, so the label a person reads and the flag the score uses agree.
+    # (They did not: "Fuliza boost, call 07..." was boosted as a lure but labelled "Needs a look".)
+    if is_likely_lure(meta):
         return out("lure", "Likely scam offer", "It " + ", and ".join(plain) + ".",
                    "Do not pay or share a PIN or code. Report it to the real company.")
     if meta.get("kind") == "topic_page":
