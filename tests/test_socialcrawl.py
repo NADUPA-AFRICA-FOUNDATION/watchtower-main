@@ -261,7 +261,9 @@ def test_bait_signals_flag_lures_but_not_advisories():
     assert "link_hosting" in _bait_signals("limit now https://le-fuliza-boost.vercel.app")[0]
     # The topic's own words are not hosting evidence (hyphen == space in phrase matching).
     assert "link_hosting" not in _bait_signals("how the Fuliza limit works for Ziidi Trader users")[0]
-    assert _bait_signals("Join t.me/somechannel or wa.me/254700000000")[0] == []
+    assert _bait_signals("Join t.me/somechannel")[0] == []
+    # A WhatsApp link that carries a phone number is a personal payment channel: a signal on its own.
+    assert _bait_signals("Join t.me/somechannel or wa.me/254700000000")[0] == ["personal_contact"]
 
 
 def test_synonyms_inside_one_family_count_once():
@@ -374,7 +376,10 @@ def test_subject_family_alone_never_lifts_a_score_and_official_handles_are_not_s
                             title="t", text="x" * 300, raw_meta={}))
     one = Item(url="https://t.me/x", source="social_web_index", source_type="social", title="t",
                text="x" * 300, raw_meta={"bait_signals": ["loan_limit_boost", "advance_fee"]})
-    assert _adjust(40, one) == base                       # one behavioural family + the subject = one signal
+    assert _adjust(40, one) == base + 6                   # the subject plus a strong signal (an upfront fee) is a lure
+    weak = Item(url="https://t.me/x", source="social_web_index", source_type="social", title="t",
+                text="x" * 300, raw_meta={"bait_signals": ["loan_limit_boost", "urgency_pressure"]})
+    assert _adjust(40, weak) == base and "likely_lure" not in weak.raw_meta    # a weak one is not
     two = Item(url="https://t.me/x", source="social_web_index", source_type="social", title="t",
                text="x" * 300, raw_meta={"bait_signals": ["loan_limit_boost", "advance_fee", "contact_funnel"]})
     assert _adjust(40, two) == base + 12
