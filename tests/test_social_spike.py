@@ -91,9 +91,13 @@ def test_a_soft_blocked_engine_and_a_refused_reddit_never_read_as_empty():
     assert v[("reddit permalink.json", "one post")]["verdict"] == "not_tested"     # nothing to follow is not a pass
 
 
-def test_markdown_names_where_it_ran_and_what_was_excluded():
+def test_markdown_names_where_it_ran_and_what_was_excluded(monkeypatch):
+    for var in ("VERCEL", "RAILWAY_ENVIRONMENT", "GITHUB_ACTIONS"):      # CI sets one of these itself
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("RENDER", "true")
+    monkeypatch.setenv("RENDER_SERVICE_NAME", "mnara")
     md = to_markdown(run_matrix("Fuliza", transport=_world(), pace=0, engine_pace=0, library=False))
-    assert "Run from: local" in md and "| duckduckgo_html | reddit | 200 | **ok** |" in md
+    assert "Run from: render (mnara" in md and "| duckduckgo_html | reddit | 200 | **ok** |" in md
     assert "excluded by policy, not by test" in md and "**instagram**" in md
 
 
