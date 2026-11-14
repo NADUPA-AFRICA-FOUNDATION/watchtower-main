@@ -31,6 +31,9 @@
     return data;
   }
   const badge = (status) => `<span class="sx-badge sx-${esc(status)}">${esc(STATUS_LABEL[status] || status)}</span>`;
+  /* A source's answer is not a hit's completeness: "ok" from a source means it returned
+     results, not that those results carry full details. */
+  const sourceBadge = (status) => `<span class="sx-badge sx-${esc(status)}">${esc(status === "ok" ? "results found" : (STATUS_LABEL[status] || status || "not asked"))}</span>`;
   const note = (el, msg, isError) => { el.textContent = msg; el.classList.toggle("sx-error", !!isError); el.hidden = !msg; };
 
   /* The analyst's name is typed once and remembered on this device only. */
@@ -51,7 +54,7 @@
     if (pending) lines.push(`<li>${esc(pending)} search job${pending === 1 ? "" : "s"} waiting or running.</li>`);
     (sources || []).forEach((s) => {
       const paused = s.breaker === "open" ? ` Paused until ${esc(when(s.breaker_until))} after repeated failures.` : "";
-      lines.push(`<li><strong>${esc(s.source)}</strong> ${badge(s.last_status)} ${esc(s.last_detail || "")}.${paused} `
+      lines.push(`<li><strong>${esc(s.source)}</strong> ${sourceBadge(s.last_status)} ${esc(s.last_detail || "")}.${paused} `
         + `Last success ${esc(when(s.last_success_at))}.</li>`);
     });
     if (!(sources || []).length) lines.push("<li>No source has been asked yet.</li>");
@@ -135,7 +138,7 @@
   /* ------------------------------------------------------------------- search */
   function renderRun(run) {
     const rows = run.outcomes.map((o) => `<tr><td>${esc(PLATFORM_LABEL[o.platform] || o.platform)}</td><td>${esc(o.source)}</td>
-      <td>${badge(o.status)}</td><td>${esc(o.detail || "")}</td></tr>`).join("");
+      <td>${sourceBadge(o.status)}</td><td>${esc(o.detail || "")}</td></tr>`).join("");
     const waiting = run.state === "running";
     const headline = waiting
       ? `Searching for “${esc(run.query)}”… ${esc(run.hits.length)} found so far`
@@ -201,7 +204,7 @@
   /* ---------------------------------------------------------------- watchlist */
   function healthTable(d) {
     if (!d.sources.length) return `<p class="sx-muted">${esc(d.note)}</p>`;
-    const rows = d.sources.map((s) => `<tr><td>${esc(s.source)}</td><td>${badge(s.last_status)}</td>
+    const rows = d.sources.map((s) => `<tr><td>${esc(s.source)}</td><td>${sourceBadge(s.last_status)}</td>
       <td>${esc(when(s.last_success_at))}</td><td>${esc(when(s.last_failure_at))}</td>
       <td>${s.breaker === "open" ? `paused until ${esc(when(s.breaker_until))}` : "running"}</td>
       <td>${s.success_rate_7d == null ? "—" : esc(Math.round(s.success_rate_7d * 100)) + "% of " + esc(s.attempts_7d)}</td>
