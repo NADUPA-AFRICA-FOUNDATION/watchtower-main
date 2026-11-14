@@ -58,8 +58,10 @@ class Services:
     ct: Any = None
     permutation: Any = None
     search_discovery: Any = None
-    newly_registered: Any = None
     alerts: Any = None
+    # After `alerts`, never before: callers build Services positionally, and a field inserted
+    # earlier silently shifted the alert engine into this slot.
+    newly_registered: Any = None
     closers: list = field(default_factory=list)
 
     async def close(self) -> None:

@@ -114,3 +114,33 @@ def test_config_validates_and_coverage_lists_the_source(cfg):
     from hunter.coverage import source_coverage
     rows = {r["source"] for r in source_coverage(HuntStore(":memory:"), cfg)}
     assert "newly_registered" in rows
+
+
+def test_buried_one_edit_matches_are_noise_but_misspellings_in_place_of_the_brand_are_not(cfg):
+    from hunter.providers.nrd import strong_typo
+    b = cfg.brand()
+    for real in ("mpessa-verify.com", "rnpesa-login.top", "safaricorn.com", "mpeza-loans.com", "m-pesaa.online", "safarlcom-promo.net"):
+        assert strong_typo(real, b), real
+    # Every one of these came through on a real daily list before the rule was tightened.
+    for noise in ("homies-app.com", "temperaturedelamer.fr", "mesaeoficio.com", "acessoriaempresa.com", "housemodernmesa.com",
+                  "opesautomation.com", "apesarrat.fr", "mesa-festiva.com", "amber-mesa.online", "garnet-mesa.com",
+                  "mr-mmesamoussa.com"):
+        assert not strong_typo(noise, b), noise
+
+    def handler(request):
+        return httpx.Response(200, content=zipped(["homies-app.com", "temperaturedelamer.fr", "mpessa-verify.com",
+                                                   "acessoriaempresa.com", "fuliza-boost.com"]))
+    result = asyncio.run(provider(handler).discover(b, cfg, {}))
+    assert {c.indicator for c in result.candidates} == {"mpessa-verify.com", "fuliza-boost.com"}
+
+
+def test_the_fast_filter_never_drops_a_name_the_full_check_keeps(cfg):
+    from hunter.prescore import plain, prescore, skeleton
+    from hunter.providers.nrd import brand_pieces
+    b = cfg.brand()
+    pieces = brand_pieces(b)
+    sample = ["mpesa-login.com", "rnpesa.top", "safaricorn.net", "fulizza-limit.xyz", "m-p3sa.site", "mshwarri.app",
+              "vodacom-tz.online", "homies-app.com", "garden-tools.net", "empresa.com", "safari-tours.co.ke"]
+    for name in sample:
+        if prescore(name, b, cfg.prescore).has_brand_signal:
+            assert any(p in plain(name) or p in skeleton(name) for p in pieces), name

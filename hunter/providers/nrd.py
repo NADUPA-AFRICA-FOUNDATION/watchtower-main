@@ -29,10 +29,69 @@ import httpx
 from watchtower.discovery.base import SourceHealth
 
 from ..normalize import InvalidIndicator, domain as normalize_domain
-from ..prescore import is_official, prescore
+from ..prescore import _label_of, is_official, levenshtein, plain, prescore, skeleton, split_domain
 from .base import Discovered, DiscoveryResult, HuntProvider, _now
 
 MAX_UNZIPPED = 50_000_000          # bytes; a real list is about 1.2 MB
+
+
+def brand_pieces(brand) -> tuple[str, ...]:
+    """Fragments one of which every name with a brand signal must contain.
+
+    The full pre-score costs about a millisecond a name, which is minutes for three daily lists.
+    A brand signal is a brand token, a related-brand token, or a token one edit away (a typo or a
+    look-alike). One edit changes at most one half of a token, so the other half appears intact:
+    checking both halves of every token (in plain and look-alike-folded form) can only let more
+    names through to the real test, never fewer. Short tokens are kept whole.
+    """
+    tokens = {plain(t) for t in (*brand.aliases, *brand.related_brands, *(_label_of(o) for o in brand.official_domains))}
+    pieces = set()
+    for t in tokens | {skeleton(t) for t in tokens}:
+        if not t:
+            continue
+        if len(t) <= 4:
+            pieces.add(t)
+        else:
+            half = len(t) // 2
+            pieces.update((t[:half], t[half:]))
+    return tuple(sorted(pieces))
+
+
+def _near(token: str, text: str) -> bool:
+    """One edit, restricted for short brand names to the edits typosquatters use.
+
+    A five-letter name like "mpesa" is one edit from many ordinary words ("mesa", "opesa",
+    "empresa"), and on a 70,000-name daily list every one of them turned up. For names of up to
+    six letters only an added or doubled letter (mpessa, mpesaa) or a changed letter that keeps
+    the first two (mpeza) counts; longer names ("safaricom", "vodacom") keep any single edit.
+    """
+    if text == token or levenshtein(token, text, 1) > 1:
+        return False
+    if len(token) >= 7:
+        return True
+    return len(text) == len(token) + 1 or (len(text) == len(token) and text[:2] == token[:2])
+
+
+def strong_typo(domain: str, brand) -> bool:
+    """A misspelling that stands where a brand name would: a whole label or hyphen part, or the
+    start of a label, one edit from a brand token (or spelling it with look-alikes).
+
+    The hunter's pre-score accepts a one-edit match anywhere inside a label, which is right for
+    certificates already found by searching the brand but floods a firehose of 70,000 unrelated
+    registrations: 'homies-app' ("miesa"), 'temperaturedelamer' ("mpera"), 'mesaeoficio' ("mesa").
+    """
+    tokens = [plain(t) for t in (*brand.aliases, *(_label_of(o) for o in brand.official_domains))]
+    labels, _ = split_domain(domain)
+    for label in labels:
+        parts = [plain(p) for p in label.split("-") if p] + [plain(label)]
+        for t in (t for t in tokens if len(t) >= 5):
+            for part in parts:
+                head = part[: len(t) + 1]
+                if skeleton(part).startswith(t) and not part.startswith(t):
+                    return True                                      # rnpesa, safaricorn
+                if any(_near(t, c) for c in {part, head[: len(t)], head[: len(t) + 1]}):
+                    return True
+    return False
 
 
 class NewlyRegisteredProvider(HuntProvider):
@@ -93,6 +152,7 @@ class NewlyRegisteredProvider(HuntProvider):
         days = [(today - timedelta(days=n)).isoformat() for n in range(1, nc.days_back + 1)]
         done, missing, failed, scanned = [], [], [], 0
         seen: dict[str, Discovered] = {}
+        pieces = brand_pieces(brand)
         for day in days:
             key = f"{self.name}:{brand.name}:{day}"
             if cursors.get(key) == "done":
@@ -107,6 +167,10 @@ class NewlyRegisteredProvider(HuntProvider):
                 continue
             scanned += len(names)
             for raw in names:
+                flat = plain(raw)
+                if not any(p in flat or p in skeleton(raw) for p in pieces):
+                    result.noise_filtered += 1
+                    continue
                 try:
                     name = normalize_domain(raw).canonical
                 except InvalidIndicator:
@@ -114,7 +178,10 @@ class NewlyRegisteredProvider(HuntProvider):
                     continue
                 if name in seen or is_official(name, brand):
                     continue
-                if not prescore(name, brand, cfg.prescore).has_brand_signal:
+                ps = prescore(name, brand, cfg.prescore)
+                signals = {r["signal"] for r in ps.reasons}
+                if not ps.has_brand_signal or (signals & {"brand_token", "related_brand_token"} == set()
+                                               and not strong_typo(name, brand)):
                     result.noise_filtered += 1
                     continue
                 seen[name] = Discovered(name, "domain", self.name, query=f"registered {day}", confidence=0.6,
