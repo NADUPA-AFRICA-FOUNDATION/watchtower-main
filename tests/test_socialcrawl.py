@@ -466,7 +466,9 @@ def test_verdict_says_what_it_is_why_and_what_to_do():
     assert named["level"] == "lure" and "Fuliza Limit Increase" in named["reason"] and "act fast" in named["reason"] and named["action"]
     two = social_verdict({"bait_signals": ["advance_fee", "contact_funnel", "loan_limit_boost"]})
     assert two["level"] == "lure" and "money upfront" in two["reason"] and "private chat" in two["reason"]
-    assert social_verdict({"bait_signals": ["advance_fee", "loan_limit_boost"]})["level"] == "check"   # subject is not a sign
+    # The subject plus a strong sign (an upfront fee) is a lure; the subject plus a weak one is not.
+    assert social_verdict({"bait_signals": ["advance_fee", "loan_limit_boost"]})["level"] == "lure"
+    assert social_verdict({"bait_signals": ["urgency_pressure", "loan_limit_boost"]})["level"] == "check"
     assert social_verdict({"kind": "topic_page"})["level"] == "topic"
     clean = social_verdict({})
     assert clean["level"] == "none" and "not opened" in clean["reason"]                               # honest about depth
