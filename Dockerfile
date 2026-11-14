@@ -17,10 +17,15 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy the rest of the application
 COPY . .
 
-# Expose the port defined in .env or default to 8000
+# Hosts such as Railway assign the port at runtime in $PORT; 8000 is the
+# local default.
 ENV PORT=8000
-EXPOSE $PORT
+EXPOSE 8000
 
-# Run the application
-# Using uvicorn with --host 0.0.0.0 to allow external access
-CMD ["uvicorn", "web.app:app", "--host", "0.0.0.0", "--port", "8000"]
+# Shell form on purpose: the exec form ["uvicorn", ..., "--port", "8000"]
+# ignored $PORT, so on a host that assigns a different port the health check
+# never reached the app. Railway is built from this file rather than Nixpacks
+# (see railway.json): Nixpacks picks one language and checks Node before
+# Python, so the root package.json (Playwright, for tests) made it build a
+# Node image that has no uvicorn. `exec` lets uvicorn receive SIGTERM directly.
+CMD exec uvicorn web.app:app --host 0.0.0.0 --port "${PORT:-8000}"

@@ -25,7 +25,7 @@ from core.enrich import Enricher
 from core.fetch import Fetcher
 from core.models import Item
 from core.sources import (BACKENDS, DEFAULT_BACKENDS, SourceError, SourceSkipped,
-                          behavioural_signals, is_likely_lure)
+                          behavioural_signals, is_google_news_link, is_likely_lure)
 
 STOPWORDS = {
     "the", "a", "an", "and", "or", "of", "in", "on", "for", "to", "at", "by",
@@ -62,8 +62,34 @@ class SweepResult:
 
 
 def _terms(query: str) -> list[str]:
-    words = re.findall(r"[a-z0-9']+", query.lower())
-    return [w for w in words if w not in STOPWORDS and len(w) > 2]
+    """Content words of the query. A hyphenated word stays one term
+    ("m-pesa"), because its halves are not the subject: "pesa" alone matched
+    every Swahili money story."""
+    words = re.findall(r"[a-z0-9']+(?:-[a-z0-9']+)*", query.lower())
+    return [w for w in words if w not in STOPWORDS and len(w.replace("-", "")) > 2]
+
+
+_TERM_RE: dict[str, re.Pattern] = {}
+
+
+def _term_re(term: str) -> re.Pattern:
+    """Match a term at the start of a word, not anywhere inside one.
+
+    Substring matching counted "pesa" inside "Kipesa", "loan" inside "Sloane"
+    and "otp" inside "adoption", which floated unrelated stories up the
+    keyword ranking. Strict whole-word matching goes too far the other way and
+    loses "frauds", "fraudulent" and "Kenyan". So the left edge is a word
+    boundary and the right edge is open.
+
+    A hyphenated term also matches its spaced and joined spellings, so
+    "m-pesa" finds "M-Pesa", "M Pesa" and "MPESA".
+    """
+    pattern = _TERM_RE.get(term)
+    if pattern is None:
+        parts = [re.escape(p) for p in term.split("-")]
+        pattern = re.compile(r"(?<![a-z0-9])" + r"[-\s]?".join(parts))
+        _TERM_RE[term] = pattern
+    return pattern
 
 
 def _keyword_score(item: Item, terms: list[str]) -> int:
@@ -75,9 +101,45 @@ def _keyword_score(item: Item, terms: list[str]) -> int:
         return 0
     title = item.title.lower()
     body = item.text.lower()
-    covered = sum(1 for t in terms if t in title or t in body)
-    weighted = sum((2 if t in title else 0) + min(body.count(t), 5) for t in terms)
+    in_title = {t: bool(_term_re(t).search(title)) for t in terms}
+    in_body = {t: len(_term_re(t).findall(body)) for t in terms}
+    covered = sum(1 for t in terms if in_title[t] or in_body[t])
+    weighted = sum((2 if in_title[t] else 0) + min(in_body[t], 5) for t in terms)
     return min(100, int((covered / len(terms)) * 60 + min(weighted, 20) * 2))
+
+
+def _norm_title(title: str) -> str:
+    return " ".join(re.sub(r"[^\w]+", " ", title.lower()).split())
+
+
+def _dedupe_key(item: Item) -> str:
+    """The content hash, except for items with no body yet.
+
+    A bodiless item hashes on its exact title, so the same story from GDELT
+    and Google News failed to merge over a curly quote or a dash. Merging them
+    matters more than it looks: the GDELT copy carries the publisher's real
+    URL, which is the only legitimate way to read a Google News story (see
+    sources.is_google_news_link). Normalising the title only applies when
+    there is no text, so two different articles under the same headline are
+    still kept apart by their bodies.
+    """
+    # A social result is an account or a post, and two of them are different leads even when
+    # the index gives them the same generic title and blurb ("Link to facebook.com", "The site
+    # owner hides the web page description"). Title or content would merge them; the URL keeps
+    # them apart. Syndication, the reason dedupe ignores URLs, does not happen to accounts.
+    if item.source_type == "social" and item.source == "social_web_index":
+        return "url:" + item.url
+    if not item.text.strip() and item.title.strip():
+        return "title:" + _norm_title(item.title)
+    return item.content_hash
+
+
+def _better_copy(new: Item, old: Item) -> bool:
+    """Keep the fuller copy. On a tie, keep the one whose URL can actually be
+    read, because a Google News redirect link never can."""
+    if len(new.text) != len(old.text):
+        return len(new.text) > len(old.text)
+    return is_google_news_link(old.url) and not is_google_news_link(new.url)
 
 
 def _domain_of(item: Item) -> str:
@@ -135,6 +197,11 @@ def _adjust(score: int, item: Item) -> int:
         # band on keyword overlap alone.
         adjusted = min(adjusted * 0.8, 55)
         item.raw_meta["headline_only"] = True
+    else:
+        # The live preview scores each item before its body is fetched, so the
+        # flag was set then and, never cleared, it labelled read articles
+        # "headline only" in the UI. It describes the item as it is now.
+        item.raw_meta.pop("headline_only", None)
 
     return max(0, min(100, int(round(adjusted))))
 
@@ -344,18 +411,16 @@ def sweep(query: str, fetcher: Fetcher, hours: int = 72,
     domains_by_hash: dict[str, set] = {}
     sources_by_hash: dict[str, set] = {}
     for item in collected:
-        h = item.content_hash
+        h = _dedupe_key(item)
         domains_by_hash.setdefault(h, set()).add(_domain_of(item))
         sources_by_hash.setdefault(h, set()).add(item.source)
         existing = by_hash.get(h)
-        if existing is None:
+        if existing is None or _better_copy(item, existing):
             by_hash[h] = item
-        elif len(item.text) > len(existing.text):
-            by_hash[h] = item                      # keep the fuller copy
 
     deduped = list(by_hash.values())
     for item in deduped:
-        h = item.content_hash
+        h = _dedupe_key(item)
         domains = sorted(d for d in domains_by_hash.get(h, set()) if d)
         item.raw_meta["corroboration"] = len(domains)
         item.raw_meta["corroborating_domains"] = domains[:8]
@@ -365,8 +430,16 @@ def sweep(query: str, fetcher: Fetcher, hours: int = 72,
               "before": len(collected), "after": len(deduped)})
 
     # --- 3. fetch bodies ----------------------------------------------
+    # A Google News redirect link is never fetched: robots.txt disallows it,
+    # and with obey_robots off it would return Google's own page, whose text
+    # would then be scored as if it were the article. Say why it is unread.
+    for i in deduped:
+        if fetch_bodies and len(i.text) < 400 and is_google_news_link(i.url):
+            i.raw_meta["fetch_error"] = ("Google News link: the feed does not give the "
+                                         "publisher URL, and no other source carried this story")
     needs_body = [i for i in deduped
                   if fetch_bodies and len(i.text) < 400
+                  and not is_google_news_link(i.url)
                   and i.source_type not in ("watchlist", "reference", "social")]
     if needs_body and time_left() <= 1.0:
         result.skipped["article bodies"] = "exceeded the sweep time budget"

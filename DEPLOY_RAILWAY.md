@@ -26,18 +26,28 @@ railway up
 
 ## ⚙️ Configuration
 
-The `railway.json` file is already configured with:
-- **Builder**: Nixpacks (automatic Python environment detection)
-- **Start Command**: Runs the FastAPI server on the correct port
-- **Health Check**: Monitors the root endpoint `/`
-- **Auto-restart**: Restarts on failure with max 10 retries
+`railway.json` builds from the repo's `Dockerfile`, not Nixpacks. Nixpacks picks
+a single language and checks Node before Python, so the root `package.json`
+(Playwright, used only by tests) made it build a Node image with no Python, and
+the start command failed with `uvicorn: command not found`.
 
-## 🔧 Environment Variables (Optional)
+- **Builder**: `DOCKERFILE` (Python 3.11, `requirements.txt`)
+- **Start**: the Dockerfile's `CMD`, which binds the `$PORT` Railway assigns
+- **Health check**: `/api/healthz`, which answers without credentials
+- **Restarts**: on failure, at most 10 retries
 
-Set these in Railway Dashboard → Settings → Variables if needed:
-- `DUCKDUCKGO_LIMIT`: Max search results (default: 10)
-- `SCAN_TIMEOUT`: Timeout for scans in seconds (default: 30)
-- `REVIEW_THRESHOLD`: Minimum score to flag as scam (default: 45)
+## 🔧 Environment Variables
+
+Set these in Railway Dashboard → Variables:
+
+- `WATCHTOWER_PASSWORD` (**required**): the app detects Railway and fails closed.
+  Without a password every page returns 503 (the health check still passes, so
+  the deploy reads as healthy). Log in as `watchtower`, or set `WATCHTOWER_USER`.
+- `GEMINI_API_KEY` or `ANTHROPIC_API_KEY`: model scoring. Without one, sweeps use
+  keyword ranking.
+- `OPENSANCTIONS_API_KEY`: optional. Without it that source shows as "off".
+- `WATCHTOWER_DATA_DIR`: point it at a mounted Railway volume, or the archive and
+  the review queue are lost on every redeploy.
 
 ## 🌐 After Deployment
 
