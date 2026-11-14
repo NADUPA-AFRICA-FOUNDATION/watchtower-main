@@ -596,6 +596,28 @@ def _enrich_social(items: list[Item], fetcher) -> None:
             item.raw_meta.setdefault("link_intel", []).append(seen[domain])
 
 
+_SITE_ALIASES = {"x.com": ("twitter.com",), "facebook.com": ("fb.com",)}
+_PREFERRED: dict = {}
+
+
+def _preferred_search() -> list:
+    """(adapter, client) for each better search source that is configured, best first.
+
+    Exa (EXA_API_KEY) then SearXNG (SEARXNG_URL). DuckDuckGo is the fallback for whichever of
+    them is missing or fails, not the default. The client caches answers in memory so a repeated
+    Exa query in the same process is not paid for twice.
+    """
+    from social.adapters import exa, searxng
+    wanted = [a for a in (exa, searxng) if a.enabled()]
+    if not wanted:
+        return []
+    if "client" not in _PREFERRED:
+        from social.net import PoliteClient
+        from social.store import SQLiteStore
+        _PREFERRED["client"] = PoliteClient(SQLiteStore())
+    return [(a, _PREFERRED["client"]) for a in wanted]
+
+
 def social_web_index(query: str, fetcher: Fetcher, hours: int = 72,
                      limit: int = 20, on_partial=None) -> list[Item]:
     """Find public social URLs through an unauthenticated web index.
@@ -669,11 +691,31 @@ def social_web_index(query: str, fetcher: Fetcher, hours: int = 72,
     # process deadlocked (stack dump: all three inside http_client.__init__ /
     # logging.emit). Pacing already dominates the latency, so parallelism bought little.
     finished: queue.Queue = queue.Queue()
+    preferred = _preferred_search()
+
+    def better(site):
+        """Ask the configured better sources (Exa, then SearXNG) first. Returns a result tuple
+        when one of them answered, else None so the DuckDuckGo path runs as the fallback."""
+        for adapter, client in preferred:
+            if stop.is_set():
+                return None
+            try:
+                out = adapter.search(client, clean_query, site, aliases=_SITE_ALIASES.get(site, ()))
+            except Exception:                              # noqa: BLE001 - fall through to the next source
+                continue
+            if out.answered:
+                rows = [{"url": r["url"], "title": r["title"], "summary": r["snippet"]} for r in out.results]
+                return site, f"{adapter.SOURCE}: {clean_query} on {site}", rows, None
+        return None
 
     def worker():
         for site in sites:
             if stop.is_set():
                 return
+            answered = better(site) if preferred else None
+            if answered is not None:
+                finished.put(answered)
+                continue
             first = one(site, f'"{clean_query}" site:{site}')
             finished.put(first)
             if multiword and len(first[2]) < 4 and not stop.is_set():
@@ -735,7 +777,7 @@ def social_web_index(query: str, fetcher: Fetcher, hours: int = 72,
                           "bait_signals": bait, "bait_terms": bait_terms, "advisory": advisory,
                           "official_account": official,
                           "lure_identity": identity,
-                          "discovery_method": "duckduckgo_web_index",
+                          "discovery_method": (q.split(":", 1)[0] + "_search") if ": " in q else "duckduckgo_web_index",
                           "indexed_query": q},
             )
             by_site[platform].append(item)

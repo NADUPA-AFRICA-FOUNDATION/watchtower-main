@@ -402,13 +402,13 @@ def test_exa_sends_the_recommended_request_and_maps_results(monkeypatch):
     assert body["type"] == "auto" and body["contents"] == {"highlights": True} and body["includeDomains"] == ["tiktok.com"]
     assert body["query"] == '"fuliza boost"' and len(body["objective"]) > 40
     outcomes = {o["source"]: o for o in store.run_get(run_id)["outcomes"]}
-    assert outcomes["exa"]["status"] == "ok" and outcomes["duckduckgo"]["status"] == "blocked"
-    assert store.run_get(run_id)["pending_jobs"] == 0                       # one source answered: no retry needed
+    assert outcomes["exa"]["status"] == "ok" and "duckduckgo" not in outcomes   # Exa answered: no fallback asked
+    assert store.run_get(run_id)["pending_jobs"] == 0
     hit = store.hits_list(run_id=run_id)[0]
     assert hit["url"] == "https://tiktok.com/@fulizaboost1/video/1" and hit["source_method"] == "search_snippet:exa"
     assert hit["author"]["username"] == "fulizaboost1" and hit["content"]["published_at"] == "2026-10-02"
     assert hit["content"]["text"].startswith("88 Likes") and len(store.hits_list()) == 1            # off-platform row dropped
-    assert "exa_test_key" not in json.dumps(store.audit_list()) and store.audit_list()[0]["sources_used"] == ["duckduckgo", "exa"]
+    assert "exa_test_key" not in json.dumps(store.audit_list()) and store.audit_list()[0]["sources_used"] == ["exa", "duckduckgo"]
     # cached: the same paid query inside six hours is not paid for again
     eng.submit_search("fuliza boost", "watching for limit-increase lures", "amina", ["tiktok"])
     drain(eng)
@@ -424,3 +424,79 @@ def test_a_refused_exa_key_is_reported_and_never_stops_the_keyless_source(monkey
     outcomes = {o["source"]: o for o in store.run_get(run_id)["outcomes"] if o["source"] != "x_oembed"}
     assert outcomes["exa"]["status"] == "blocked" and "refused" in outcomes["exa"]["detail"]
     assert outcomes["duckduckgo"]["status"] == "ok" and len(store.hits_list(run_id=run_id)) == 2
+
+
+
+# --------------------------------------------------------------------------- searxng and the chain
+
+SEARX_BODY = {"results": [
+    {"url": "https://twitter.com/SafaricomPLC/status/2079525210290626567", "title": "Safaricom PLC on X", "engine": "brave",
+     "content": "CUSTOMER NOTICE. Be aware of fake websites.", "publishedDate": "2026-07-21T00:00:00"},
+    {"url": "https://example.com/news", "title": "off platform", "content": "x"}],
+    "unresponsive_engines": [["google", "CAPTCHA"]]}
+
+
+def searx_world(mode="ok", calls=None):
+    def handler(request):
+        if request.url.host == "searx.local":
+            if calls is not None:
+                calls.append(str(request.url))
+            if mode == "down":
+                return httpx.Response(502)
+            if mode == "all_failed":
+                return httpx.Response(200, json={"results": [], "unresponsive_engines": [["google", "CAPTCHA"], ["bing", "timeout"]]})
+            return httpx.Response(200, json=SEARX_BODY)
+        if request.url.host == "api.exa.ai":
+            return httpx.Response(402, json={"error": "no credit"})
+        return world("ok").handler(request)
+    return httpx.MockTransport(handler)
+
+
+def test_searxng_maps_results_names_failed_engines_and_never_hides_a_total_failure(monkeypatch):
+    from social.adapters import searxng
+    monkeypatch.setenv("SEARXNG_URL", "http://searx.local/")
+    calls = []
+    eng, _, clock = engine(searx_world(calls=calls))
+    out = searxng.search(eng.client, "Safaricom", "x.com", aliases=("twitter.com",))
+    assert out.status == "ok" and "google" in out.detail and len(out.results) == 1
+    assert out.results[0]["url"] == "https://x.com/SafaricomPLC/status/2079525210290626567"
+    assert out.results[0]["published_at"] == "2026-07-21" and "format=json" in calls[0] and "site%3Ax.com" in calls[0]
+    eng, _, _ = engine(searx_world("all_failed"))
+    assert searxng.search(eng.client, "Safaricom", "x.com").status == "blocked"
+    eng, _, _ = engine(searx_world("down"))
+    assert searxng.search(eng.client, "Safaricom", "x.com").status == "error"
+    monkeypatch.delenv("SEARXNG_URL")
+    assert searxng.search(eng.client, "Safaricom", "x.com").status == "disabled"
+
+
+def test_the_chain_prefers_exa_then_searxng_and_uses_duckduckgo_only_as_the_last_resort(monkeypatch):
+    from social.pipeline import discovery_sources
+    monkeypatch.delenv("EXA_API_KEY", raising=False)
+    monkeypatch.delenv("SEARXNG_URL", raising=False)
+    assert [a.SOURCE for a in discovery_sources()] == ["duckduckgo"]
+    monkeypatch.setenv("SEARXNG_URL", "http://searx.local")
+    monkeypatch.setenv("EXA_API_KEY", "exa_no_credit")
+    assert [a.SOURCE for a in discovery_sources()] == ["exa", "searxng", "duckduckgo"]
+    calls = []
+    eng, store, _ = engine(searx_world(calls=calls))
+    run_id = eng.submit_search("Safaricom", "checking a customer report", "amina", ["x"])
+    drain(eng)
+    seen = [(o["source"], o["status"]) for o in store.run_get(run_id)["outcomes"] if o["source"] != "x_oembed"]
+    assert seen == [("exa", "blocked"), ("searxng", "ok")]                      # Exa refused; SearXNG answered; DDG never asked
+    assert store.hits_list(run_id=run_id)[0]["source_method"] in {"search_snippet:searxng", "enrichment:x_oembed"}
+
+
+def test_monitor_social_search_uses_the_better_source_when_one_is_configured(monkeypatch):
+    import core.sources as src
+    from core.sources import social_web_index
+    monkeypatch.setattr(src, "SOCIAL_PACE", 0)
+    monkeypatch.setattr(src, "SOCIAL_CACHE_TTL", 0)
+    monkeypatch.setenv("SEARXNG_URL", "http://searx.local")
+    monkeypatch.delenv("EXA_API_KEY", raising=False)
+    store = SQLiteStore()
+    monkeypatch.setattr(src, "_PREFERRED", {"client": PoliteClient(store, transport=searx_world(), sleep=lambda s: None)})
+    ddg = []
+    monkeypatch.setattr("osint_discovery.search_duckduckgo", lambda q, max_results: ddg.append(q) or [])
+    items = social_web_index("Safaricom", None)
+    assert ddg == [] and [i.url for i in items] == ["https://x.com/SafaricomPLC/status/2079525210290626567"]
+    assert items[0].raw_meta["discovery_method"] == "searxng_search"

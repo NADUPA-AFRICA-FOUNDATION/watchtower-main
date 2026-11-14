@@ -1,6 +1,6 @@
-# Exa search API: optional, paid, OFF unless EXA_API_KEY is set. The zero-budget brief allows a
-# keyed source only as an opt-in that the system works without, so DuckDuckGo stays the default
-# and Exa is added beside it, never in place of it.
+# Exa search API: optional, paid, OFF unless EXA_API_KEY is set. When set it is the first
+# source asked; SearXNG and then DuckDuckGo are the fallbacks if it cannot answer. The system
+# still works with none of the keys set (zero-budget rule), just less reliably.
 #
 # Request shape follows Exa's own guidance (build-with-exa skill): query, type auto, and
 # highlights for content, nothing else, except

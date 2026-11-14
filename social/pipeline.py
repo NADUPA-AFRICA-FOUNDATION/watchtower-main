@@ -17,7 +17,7 @@ import random
 import re
 from urllib.parse import urlsplit
 
-from social.adapters import Outcome, duckduckgo, exa, reddit_json, x_oembed
+from social.adapters import Outcome, duckduckgo, exa, reddit_json, searxng, x_oembed
 from social.net import PoliteClient, now_ms
 from social.schema import PLATFORMS, author_from_url, canonical_url, merge_hit, new_hit, platform_of
 from social.scoring import score_hit
@@ -27,8 +27,10 @@ DISCOVERY_SOURCE = duckduckgo.SOURCE
 
 
 def discovery_sources() -> list:
-    """Keyless first and always; a keyed source joins only when its key is set."""
-    return [duckduckgo] + ([exa] if exa.enabled() else [])
+    """In order of preference. Each configured source is tried in turn and the first one that
+    answers settles the job, so DuckDuckGo (the only one that needs no setup, and the weakest:
+    it challenges after a few searches) is the last resort, not the default."""
+    return ([exa] if exa.enabled() else []) + ([searxng] if searxng.enabled() else []) + [duckduckgo]
 ENRICHERS = {"x": x_oembed, "reddit": reddit_json}
 # What can be said, without testing, about platforms that have no enrichment adapter.
 ENRICHMENT_NOTE = {
@@ -199,6 +201,8 @@ class Engine:
                 detail += f". Details: {ENRICHMENT_NOTE[platform]}"
             self.store.run_outcome(p.get("run_id") or "", platform, outcome.source, outcome.status, detail, len(results), now)
             outcomes.append(outcome)
+            if outcome.answered:
+                break                    # an answer from a better source settles it; the rest are fallbacks
         if p.get("only_url") and not any_results and ENRICHERS.get(platform) and ENRICHERS[platform].applies(p["only_url"]):
             # No search entry, but this platform has a documented details endpoint: ask it directly.
             self.store.job_enqueue("enrich", {"run_id": p.get("run_id"), "url": p["only_url"], "create": True}, now,
