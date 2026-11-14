@@ -1,0 +1,25 @@
+# Render Blueprint. The app already recognises Render (RENDER is set by the platform), so off
+# localhost it fails closed until WATCHTOWER_PASSWORD is set in the service's environment.
+#
+# Storage: a Render web service's filesystem is wiped on every deploy and restart unless a
+# disk is attached, and disks are not available on the free plan. Until the data layer moves
+# off SQLite, saved results, the review queue and the hunter database do not survive a
+# restart here. Set WATCHTOWER_DATA_DIR to a mounted disk to keep them.
+#
+# The watchlist worker is added in Phase 2, when there is a queue for it to run.
+services:
+  - type: web
+    name: mnara
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn web.app:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/healthz
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.9"
+      - key: WATCHTOWER_PASSWORD
+        sync: false            # set in the Render dashboard; never committed
+      - key: WATCHTOWER_USER
+        value: watchtower
