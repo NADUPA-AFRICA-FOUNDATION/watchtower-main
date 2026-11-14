@@ -17,13 +17,18 @@ import random
 import re
 from urllib.parse import urlsplit
 
-from social.adapters import Outcome, duckduckgo, reddit_json, x_oembed
+from social.adapters import Outcome, duckduckgo, exa, reddit_json, x_oembed
 from social.net import PoliteClient, now_ms
 from social.schema import PLATFORMS, author_from_url, canonical_url, merge_hit, new_hit, platform_of
 from social.scoring import score_hit
 from social.store import DAY_MS
 
 DISCOVERY_SOURCE = duckduckgo.SOURCE
+
+
+def discovery_sources() -> list:
+    """Keyless first and always; a keyed source joins only when its key is set."""
+    return [duckduckgo] + ([exa] if exa.enabled() else [])
 ENRICHERS = {"x": x_oembed, "reddit": reddit_json}
 # What can be said, without testing, about platforms that have no enrichment adapter.
 ENRICHMENT_NOTE = {
@@ -107,7 +112,7 @@ class Engine:
         else:
             wanted = [p for p in (platforms or list(PLATFORMS)) if p in PLATFORMS] or list(PLATFORMS)
         run_id = self.store.run_create("adhoc", " ".join(query.split()), purpose.strip(), user, wanted, now)
-        self.store.audit(user, f"search:{kind['kind']}", " ".join(query.split()), [DISCOVERY_SOURCE], purpose.strip(), now)
+        self.store.audit(user, f"search:{kind['kind']}", " ".join(query.split()), [a.SOURCE for a in discovery_sources()], purpose.strip(), now)
         for platform in wanted:
             self.store.job_enqueue("discover", {"run_id": run_id, "term": kind["term"], "platform": platform,
                                                 "match_type": "fuzzy" if kind["kind"] == "handle" else "exact",
@@ -125,7 +130,7 @@ class Engine:
                                      "only_url": None}, now, dedupe_key=f"discover:{w['term'].lower()}:{platform}"):
                     queued += 1
         if queued:
-            self.store.audit(user, "watchlist_run", f"{queued} job(s)", [DISCOVERY_SOURCE], "watchlist monitoring", now)
+            self.store.audit(user, "watchlist_run", f"{queued} job(s)", [a.SOURCE for a in discovery_sources()], "watchlist monitoring", now)
         return queued
 
     # ------------------------------------------------------------------ running work
@@ -171,31 +176,39 @@ class Engine:
         platform, domain = p["platform"], PLATFORMS[p["platform"]][0]
         term = p["term"]
         search_term = re.sub(r"^https?://", "", term) if p.get("only_url") else term
-        outcome = self._guarded(DISCOVERY_SOURCE, lambda state: duckduckgo.search(
-            self.client, search_term, domain, last_success_at=(state or {}).get("last_success_at"), now=now,
-            rotation=job["attempts"], aliases=PLATFORMS[platform][1:]))
-        results = outcome.results
-        if p.get("only_url"):
-            results = [r for r in results if r["url"] == p["only_url"]]
-            if outcome.status == "ok" and not results:
-                outcome = Outcome(outcome.source, "not_found", "the search engine has no entry for that exact URL")
         terms = self._terms({"term": term, "match_type": p.get("match_type", "exact")} if not p.get("only_url") else None)
-        new = 0
-        for r in results:
-            hit = new_hit(platform, r["url"], f"search_snippet:{DISCOVERY_SOURCE}", "snippet_only", now,
-                          username=author_from_url(platform, r["url"]), text=r["snippet"] or None, title=r["title"] or None,
-                          published_at=r["published_at"])
-            new += self._save(hit, terms, now, p.get("run_id"))["created"]
-        if p.get("only_url") and not results and ENRICHERS.get(platform) and ENRICHERS[platform].applies(p["only_url"]):
+        outcomes, any_results = [], False
+        for adapter in discovery_sources():
+            outcome = self._guarded(adapter.SOURCE, lambda state, adapter=adapter: adapter.search(
+                self.client, search_term, domain, last_success_at=(state or {}).get("last_success_at"), now=now,
+                rotation=job["attempts"], aliases=PLATFORMS[platform][1:]))
+            results = outcome.results
+            if p.get("only_url"):
+                results = [r for r in results if r["url"] == p["only_url"]]
+                if outcome.status == "ok" and not results:
+                    outcome = Outcome(outcome.source, "not_found", "the search engine has no entry for that exact URL")
+            new = 0
+            for r in results:
+                hit = new_hit(platform, r["url"], f"search_snippet:{adapter.SOURCE}", "snippet_only", now,
+                              username=author_from_url(platform, r["url"]) or r.get("author"), text=r["snippet"] or None,
+                              title=r["title"] or None, published_at=r["published_at"])
+                new += self._save(hit, terms, now, p.get("run_id"))["created"]
+            any_results = any_results or bool(results)
+            detail = outcome.detail + (f"; {new} new" if results else "")
+            if platform in ENRICHMENT_NOTE and results:
+                detail += f". Details: {ENRICHMENT_NOTE[platform]}"
+            self.store.run_outcome(p.get("run_id") or "", platform, outcome.source, outcome.status, detail, len(results), now)
+            outcomes.append(outcome)
+        if p.get("only_url") and not any_results and ENRICHERS.get(platform) and ENRICHERS[platform].applies(p["only_url"]):
             # No search entry, but this platform has a documented details endpoint: ask it directly.
             self.store.job_enqueue("enrich", {"run_id": p.get("run_id"), "url": p["only_url"], "create": True}, now,
                                    dedupe_key=f"enrich:{p['only_url']}")
-        detail = outcome.detail + (f"; {new} new" if results else "")
-        if platform in ENRICHMENT_NOTE and results:
-            detail += f". Details: {ENRICHMENT_NOTE[platform]}"
-        self.store.run_outcome(p.get("run_id") or "", platform, outcome.source, outcome.status, detail, len(results), now)
-        if not outcome.answered and outcome.status != "disabled":
-            raise Retry(self._backoff(job["attempts"]), f"{outcome.source}: {outcome.status} ({outcome.detail})")
+        # Retry only when no source could look. One source answering ("nothing here") settles it.
+        if not any(o.answered for o in outcomes):
+            failed = [o for o in outcomes if o.status != "disabled"]
+            if failed:
+                raise Retry(self._backoff(job["attempts"]),
+                            "; ".join(f"{o.source}: {o.status} ({o.detail})" for o in failed))
 
     def _save(self, hit: dict, terms: list[dict], now: int, run_id: str | None) -> dict:
         old = self.store.hit_get_by_url(hit["url"])

@@ -359,3 +359,68 @@ def test_lure_wording_raises_the_score_and_carries_a_plain_verdict():
     drain(eng)
     hit = next(h for h in store.hits_list() if h["author"]["username"] == "fulizaboost1")
     assert hit["verdict"]["level"] == "lure" and any(r["signal"] == "lure_wording" for r in hit["reasons"])
+
+
+# ------------------------------------------------------------------------------- exa
+
+EXA_BODY = {"results": [
+    {"url": "https://www.tiktok.com/@fulizaboost1/video/1?lang=en", "title": "Apply now | TikTok", "author": "Fuliza Boost",
+     "publishedDate": "2026-10-02T00:00:00.000Z", "highlights": ["88 Likes, TikTok video from Fuliza Boost: Apply now"]},
+    {"url": "https://en.wikipedia.org/wiki/Fuliza", "title": "Fuliza", "highlights": ["off platform"]}]}
+
+
+def exa_world(status=200, calls=None):
+    def handler(request):
+        if request.url.host == "api.exa.ai":
+            if calls is not None:
+                calls.append((dict(request.headers), json.loads(request.content)))
+            return httpx.Response(status, json=EXA_BODY if status == 200 else {"error": "x"})
+        return world("challenge").handler(request)
+    return httpx.MockTransport(handler)
+
+
+def test_exa_is_off_without_a_key_and_the_pipeline_never_asks_it(monkeypatch):
+    monkeypatch.delenv("EXA_API_KEY", raising=False)
+    from social.pipeline import discovery_sources
+    assert [a.SOURCE for a in discovery_sources()] == ["duckduckgo"]
+    calls = []
+    eng, store, _ = engine(exa_world(calls=calls))
+    run_id = eng.submit_search("fuliza boost", "watching for limit-increase lures", "amina", ["tiktok"])
+    drain(eng)
+    assert calls == [] and {o["source"] for o in store.run_get(run_id)["outcomes"]} == {"duckduckgo"}
+
+
+def test_exa_sends_the_recommended_request_and_maps_results(monkeypatch):
+    monkeypatch.setenv("EXA_API_KEY", "exa_test_key")
+    calls = []
+    eng, store, _ = engine(exa_world(calls=calls))
+    run_id = eng.submit_search("fuliza boost", "watching for limit-increase lures", "amina", ["tiktok"])
+    drain(eng)
+    headers, body = calls[0]
+    assert headers["x-api-key"] == "exa_test_key"
+    assert set(body) == {"query", "type", "objective", "includeDomains", "contents"}            # nothing decorative
+    assert body["type"] == "auto" and body["contents"] == {"highlights": True} and body["includeDomains"] == ["tiktok.com"]
+    assert body["query"] == '"fuliza boost"' and len(body["objective"]) > 40
+    outcomes = {o["source"]: o for o in store.run_get(run_id)["outcomes"]}
+    assert outcomes["exa"]["status"] == "ok" and outcomes["duckduckgo"]["status"] == "blocked"
+    assert store.run_get(run_id)["pending_jobs"] == 0                       # one source answered: no retry needed
+    hit = store.hits_list(run_id=run_id)[0]
+    assert hit["url"] == "https://tiktok.com/@fulizaboost1/video/1" and hit["source_method"] == "search_snippet:exa"
+    assert hit["author"]["username"] == "fulizaboost1" and hit["content"]["published_at"] == "2026-10-02"
+    assert hit["content"]["text"].startswith("88 Likes") and len(store.hits_list()) == 1            # off-platform row dropped
+    assert "exa_test_key" not in json.dumps(store.audit_list()) and store.audit_list()[0]["sources_used"] == ["duckduckgo", "exa"]
+    # cached: the same paid query inside six hours is not paid for again
+    eng.submit_search("fuliza boost", "watching for limit-increase lures", "amina", ["tiktok"])
+    drain(eng)
+    assert len(calls) == 1
+
+
+def test_a_refused_exa_key_is_reported_and_never_stops_the_keyless_source(monkeypatch):
+    monkeypatch.setenv("EXA_API_KEY", "exa_bad")
+    eng, store, _ = engine(httpx.MockTransport(lambda r: httpx.Response(401) if r.url.host == "api.exa.ai"
+                                               else world("ok").handler(r)))
+    run_id = eng.submit_search("Safaricom", "checking a customer report", "amina", ["x"])
+    drain(eng)
+    outcomes = {o["source"]: o for o in store.run_get(run_id)["outcomes"] if o["source"] != "x_oembed"}
+    assert outcomes["exa"]["status"] == "blocked" and "refused" in outcomes["exa"]["detail"]
+    assert outcomes["duckduckgo"]["status"] == "ok" and len(store.hits_list(run_id=run_id)) == 2

@@ -16,7 +16,7 @@ from typing import Callable, Optional
 from fastapi import APIRouter, Body, HTTPException, Query, Request
 
 from social.adapters import load_config
-from social.pipeline import DISCOVERY_SOURCE, ENRICHERS, ENRICHMENT_NOTE, Engine
+from social.pipeline import DISCOVERY_SOURCE, ENRICHERS, ENRICHMENT_NOTE, Engine, discovery_sources
 from social.schema import PLATFORMS, REVIEW_STATUSES
 
 _ID = re.compile(r"^[A-Za-z0-9_|:.\-]{1,120}$")
@@ -87,7 +87,7 @@ def build_router(get_store: Callable[[], object], identity: Callable[[Request, s
     def status():
         store = get_store()
         return {"storage": store.backend, "worker": worker_state(store), "pending_jobs": store.jobs_pending(),
-                "discovery": DISCOVERY_SOURCE,
+                "discovery": [a.SOURCE for a in discovery_sources()],
                 "platforms": {p: {"discovery": "search-engine snippets",
                                   "details": (ENRICHERS[p].SOURCE if p in ENRICHERS and load_config(ENRICHERS[p].SOURCE).get("enabled")
                                               else None),

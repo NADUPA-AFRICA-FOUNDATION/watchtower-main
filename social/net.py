@@ -7,6 +7,7 @@ off by default.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import time
 from dataclasses import dataclass
@@ -59,6 +60,29 @@ class PoliteClient:
             out = Fetched(r.status_code, r.text, str(r.url))
         except Exception as exc:                                   # noqa: BLE001 - the error is the result
             out = Fetched(0, "", url, error=f"{type(exc).__name__}: {exc}"[:200])
+        self._last[host] = self.clock()
+        if ttl > 0 and out.status == 200 and out.body:
+            self.store.cache_put(key, out.body, out.status, self.clock(), int(ttl * 1000))
+        return out
+
+    def post_json(self, url: str, payload: dict, headers: dict, *, min_interval: float = 1.0, ttl: float = 0.0) -> Fetched:
+        """POST for keyed JSON APIs. Cached by URL and body, so a paid query asked twice is paid for once.
+        The key travels in `headers` and is never part of the cache key."""
+        body = json.dumps(payload, sort_keys=True)
+        key = hashlib.sha256(f"POST {url} {body}".encode()).hexdigest()
+        if ttl > 0:
+            hit = self.store.cache_get(key, self.clock())
+            if hit:
+                return Fetched(hit["status"], hit["body"], url, from_cache=True)
+        host = urlsplit(url).hostname or ""
+        wait = min_interval * 1000 - (self.clock() - self._last.get(host, -10**12))
+        if wait > 0:
+            self.sleep(wait / 1000)
+        try:
+            r = self.http.post(url, content=body, headers={"Content-Type": "application/json", **headers})
+            out = Fetched(r.status_code, r.text, str(r.url))
+        except Exception as exc:                                   # noqa: BLE001 - the error is the result
+            out = Fetched(0, "", url, error=f"{type(exc).__name__}"[:200])   # never echo a message that could hold the key
         self._last[host] = self.clock()
         if ttl > 0 and out.status == 200 and out.body:
             self.store.cache_put(key, out.body, out.status, self.clock(), int(ttl * 1000))
