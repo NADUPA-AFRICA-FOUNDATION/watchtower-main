@@ -326,8 +326,10 @@ LEXICON: dict[str, list[str]] = {
     # Sheng / street-register lures. The thinnest bucket; UNVERIFIED.
     "sheng": [
         "ongeza fuliza kwa dakika", "tunaincrease limit", "tunaboost fuliza",
-        "tunaupgrade limit", "tunaongeza limit", "kuincrease limit ni very easy",
-        "ni very easy", "ni ezzy", "ni easy tu", "mambo ni poa tu", "pesa ni nyingi",
+        "tunaupgrade limit", "tunaongeza limit",
+        # "Kuincrease fuliza limit ni very easy" is Safaricom's own campaign line, so neither it nor
+        # "ni very easy" is a lure phrase: they flagged Safaricom's real account in testing.
+        "ni ezzy", "ni easy tu", "mambo ni poa tu", "pesa ni nyingi",
         "pesa ya haraka sana", "chapa pesa", "kuchapa pesa", "tengeneza doh",
         "doh ya haraka", "doh ya bure", "doh bila stress", "bila stress", "bila ID",
         "bila crb", "bila form", "bila kuchelewa", "ndani ya dakika tano",
@@ -397,8 +399,30 @@ SUBJECT_FAMILIES = frozenset({"loan_limit_boost"})
 # ("increase your Fuliza limit"); it is the thing being impersonated, not an impersonator.
 # Matched on the whole handle only, so a lookalike (safaricom_plc_ke) is not excused.
 OFFICIAL_HANDLES = frozenset({"safaricomplc", "safaricom", "safaricom_care", "safaricomnews",
-                              "safaricomethiopia", "mpesa", "mpesafoundation", "nse_plc",
-                              "cmakenya", "centralbankkenya"})
+                              "safaricomethiopia", "safaricomfoundation", "mpesa", "mpesaafrica",
+                              "mpesafoundation", "mpesafoundationacademy", "nse_plc", "cmakenya",
+                              "centralbankkenya", "kcbinkenya", "kcbgroup",
+                              # Instagram handles take a trailing underscore when the plain name is taken.
+                              "safaricomplc_"})
+
+# Brands whose name in a third-party account's identity is itself the lure: Safaricom states that
+# no third party can raise a Fuliza limit and that Ziidi has no standalone presence, so an account
+# CALLED "Fuliza Limit Increase" needs no further bait wording to be worth a look. Matched on the
+# identity with punctuation removed, so "fuliza_limit.boost" and "FulizaLimitBoost" are the same.
+IDENTITY_BRANDS = ("fuliza", "mshwari", "mpesa", "safaricom", "ziidi", "hustlerfund", "okoajahazi", "kcbmpesa")
+IDENTITY_SERVICES = ("increase", "increament", "increment", "increasment", "boost", "upgrade", "limit", "loan",
+                     "promo", "giveaway", "agent", "customercare", "support", "assistant", "portal",
+                     "moneymarket", "invest", "signals", "trading",
+                     # "Hack money in mpesa", "fuliza_software": selling a trick that cannot exist.
+                     "hack", "cheat", "software", "trick")
+# An M-PESA agent is a real, licensed shop: "GenZ mpesa agent" is a business, not a lure. Only these
+# brand/service pairs are excused; "fuliza agent" or "hustler fund agent" are not.
+IDENTITY_LEGIT_PAIRS = frozenset({("mpesa", "agent"), ("safaricom", "agent")})
+# Lure pages also name themselves for the amount they promise: "Fuliza upto 75k".
+IDENTITY_AMOUNT = r"(?:upto|uptoksh|\d{2,3}k\b|\d{2,3}k(?=[a-z]|$)|ksh\d{3,})"
+# What a brand-named account's bio says when it is selling the service rather than being the brand.
+IDENTITY_OFFER_BIO = (r"\b(?:apply|increment|increament|boost|upgrade|limit increase|increase (?:your )?(?:[\w-]+ )?limit"
+                      r"|loan service|loan limit|we offer|click (?:on )?the link|link below|dm|inbox)\b")
 
 COMPILED: dict[str, re.Pattern[str]] = {
     cat: re.compile("|".join(sorted((_phrase_pattern(p) for p in set(terms)), key=len, reverse=True)), re.I)

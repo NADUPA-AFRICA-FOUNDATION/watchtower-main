@@ -129,6 +129,8 @@ class EnrichConfig:
     # Once the schedule is spent the candidate is IGNORED (visibly, and re-queueable).
     unregistered_recheck_days: list[float] = field(default_factory=lambda: [1, 3, 7, 14, 30])
     max_batch_seconds: float = 600.0     # time budget: candidates not started by then are deferred, visibly
+    threat_feeds: bool = True            # match candidates against free phishing lists (downloaded, matched locally)
+    threat_feed_cache_hours: float = 12.0
 
 
 @dataclass
@@ -238,6 +240,7 @@ class SchedulerConfig:
     ct_minutes: float = 30.0
     permutation_hours: float = 24.0
     search_discovery_hours: float = 6.0
+    newly_registered_hours: float = 6.0     # the list changes daily; a 6-hourly check catches it the same day
     enrich_seconds: float = 60.0
     enrich_limit: int = 20
     refresh_minutes: float = 60.0
@@ -284,6 +287,16 @@ class SearchDiscoveryConfig:
 
 
 @dataclass
+class NewlyRegisteredConfig:
+    enabled: bool = True
+    # {token} is base64("YYYY-MM-DD.zip"), the scheme the WhoisDS download links use.
+    url_template: str = "https://www.whoisds.com//whois-database/newly-registered-domains/{token}/nrd"
+    days_back: int = 3                  # the free lists cover the last few days; earlier ones disappear
+    max_candidates: int = 300           # per brand per run
+    timeout_seconds: float = 60.0
+
+
+@dataclass
 class HuntConfig:
     brands: list[Brand]
     prescore: PreScoreConfig = field(default_factory=PreScoreConfig)
@@ -300,6 +313,7 @@ class HuntConfig:
     alerts: AlertsConfig = field(default_factory=AlertsConfig)
     retention: RetentionConfig = field(default_factory=RetentionConfig)
     search_discovery: SearchDiscoveryConfig = field(default_factory=SearchDiscoveryConfig)
+    newly_registered: NewlyRegisteredConfig = field(default_factory=NewlyRegisteredConfig)
 
     def brand(self, name: str | None = None) -> Brand:
         if name is None and len(self.brands) == 1:
@@ -323,7 +337,7 @@ def parse(raw: dict[str, Any]) -> HuntConfig:
     raw = _only("hunter config", raw or {}, {"brands", "prescore", "permutations",
                                              "certificate_transparency", "budgets", "enrichment",
                                              "acquisition", "signals", "scoring", "pivots", "correlation", "scheduler", "alerts", "retention",
-                                             "search_discovery"})
+                                             "search_discovery", "newly_registered"})
     if not raw.get("brands"):
         raise ConfigError("no brands configured: a hunt with nothing to look for would report a clean result")
     brands = []
@@ -425,6 +439,9 @@ def parse(raw: dict[str, Any]) -> HuntConfig:
         return obj
     sch, al, ret = section("scheduler", SchedulerConfig()), section("alerts", AlertsConfig()), section("retention", RetentionConfig())
     sd = section("search_discovery", SearchDiscoveryConfig())
+    nrd = section("newly_registered", NewlyRegisteredConfig())
+    if nrd.days_back < 1 or nrd.max_candidates < 1 or "{token}" not in nrd.url_template:
+        raise ConfigError("newly_registered: days_back and max_candidates >= 1, and url_template must contain {token}")
     if sch.breaker_failures < 1 or sch.tick_seconds <= 0 or min(sch.refresh_days.values(), default=1) <= 0:
         raise ConfigError("scheduler: breaker_failures >= 1, tick_seconds > 0 and refresh_days > 0 are required")
     if ret.personal_data_days <= 0 or al.cooldown_hours < 0:
@@ -432,7 +449,7 @@ def parse(raw: dict[str, Any]) -> HuntConfig:
     if any("{brand}" not in t for t in sd.templates):
         raise ConfigError("every search_discovery template must contain {brand}")
     return HuntConfig(brands, pre, perm, ct, int(budgets.get("max_candidates_per_run", 500)), enrich, acq, sig, sc, pv, co,
-                      sch, al, ret, sd)
+                      sch, al, ret, sd, nrd)
 
 
 def load(path: str | Path = "hunter.yaml") -> HuntConfig:

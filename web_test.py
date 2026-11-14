@@ -98,6 +98,11 @@ def main():
         next(source for source in body["sources"] if source["name"] == name)["default"]
         for name in DEFAULT_BACKENDS
     ))
+    # The Monitor view builds its chips from surface != "investigation". A default sweep
+    # backend that only exists on the investigation surface has no chip and is never searched.
+    monitor_names = {s["name"] for s in body["sources"] if s.get("surface") != "investigation"}
+    ok &= check("every default sweep backend has a Monitor entry",
+                set(DEFAULT_BACKENDS) <= monitor_names and "social_web_index" in monitor_names)
     ok &= check("lists the free investigation providers",
                 {"certificate_transparency", "common_crawl", "rdap", "dns",
                  "tls", "urlhaus", "threatfox"} <= names)

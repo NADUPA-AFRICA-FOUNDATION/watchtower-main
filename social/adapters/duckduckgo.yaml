@@ -1,0 +1,43 @@
+# DuckDuckGo's HTML endpoints, queried with site: restrictions. The only keyless discovery
+# source that answered an honest client in the Phase 1 matrix (docs/source-matrix.md).
+name: duckduckgo
+enabled: true
+
+# Tried in turn, starting from a different one each request, so a challenge on one page
+# can fall back to the other once.
+hosts:
+  - {name: html, url: "https://html.duckduckgo.com/html/", param: q}
+  - {name: lite, url: "https://lite.duckduckgo.com/lite/", param: q}
+
+query_template: '"{term}" site:{domain}'
+
+# Recency filter. Left empty because Phase 1 could not confirm it: the recency probe was
+# always sent after the engine had started challenging. Set value to d, w, m or y to try it.
+recency: {param: df, value: ""}
+
+# The matrix got about three site-restricted searches before a challenge at one request per
+# five seconds, so this is deliberately slow. The watchlist is a background job, not a race.
+min_interval_seconds: 20
+cache_ttl_seconds: 21600
+
+# A response is a block if its status is listed or the page contains a marker.
+rate_limited_status: [429]
+blocked_status: [202, 401, 403, 418]
+block_markers:
+  - "anomaly"
+  - "captcha"
+  - "unusual traffic"
+  - "bots use duckduckgo too"
+  - "challenge-form"
+
+# Result parsing. `link` captures (href, title-html); `snippet` is searched for in the text
+# between one result link and the next. Redirect-wrapped hrefs are unwrapped from `redirect_param`.
+link_pattern: '<a[^>]*href="([^"]+)"[^>]*>(.*?)</a>'
+snippet_pattern: 'class=[''"][^''"]*snippet[^''"]*[''"][^>]*>(.*?)</(?:a|td|div|span)>'
+redirect_param: uddg
+date_prefix_pattern: '^\s*([A-Z][a-z]{2,8} \d{1,2}, \d{4})\s*[·\-–—]\s*'
+max_results: 20
+
+# An empty answer is only believed if the engine has answered something recently. Otherwise
+# this query is sent; it must return a link to expect_host, or the engine is soft-blocking.
+control: {query: "wikipedia kenya", expect_host: wikipedia.org, trust_seconds: 1800}

@@ -193,3 +193,38 @@ def test_keyword_match_keeps_inflections_and_spellings():
     assert _score("kenya", "Kenyan regulator acts") > 0
     for title in ("M-Pesa outage", "MPESA outage", "M Pesa outage", "m–pesa outage".replace("–", "-")):
         assert _score("m-pesa", title) > 0, title
+
+
+def test_lure_accounts_survive_the_word_coverage_filter(monkeypatch):
+    """The 60% rule cuts noise, but a scam account rarely repeats the searcher's words."""
+    import core.sources as src
+    from core.sources import social_web_index
+    monkeypatch.setattr(src, "SOCIAL_PACE", 0)
+    monkeypatch.setattr(src, "SOCIAL_CACHE_TTL", 0)
+    monkeypatch.delenv("EXA_API_KEY", raising=False)
+    monkeypatch.delenv("SEARXNG_URL", raising=False)
+
+    def search(query, max_results):
+        if "site:tiktok.com" in query and query.startswith('"'):
+            return [{"title": "KCB MPESA (@kcb.mpesa7) | TikTok", "url": "https://www.tiktok.com/@kcb.mpesa7",
+                     "summary": "1148 Followers. Click on the link below to Apply."},
+                    {"title": "Kenya travel vlog | TikTok", "url": "https://www.tiktok.com/@traveller",
+                     "summary": "Beautiful Kenya sunsets"}]
+        return []
+    monkeypatch.setattr("osint_discovery.search_duckduckgo", search)
+    urls = [i.url for i in social_web_index("KCB M-Pesa limit increase", None)]
+    assert "https://www.tiktok.com/@kcb.mpesa7" in urls          # a lure, though only one query word matched
+    assert "https://www.tiktok.com/@traveller" not in urls       # noise is still filtered
+
+
+def test_distinct_social_accounts_with_generic_titles_are_not_merged():
+    from core.models import Item
+    from core.sweep import _dedupe_key
+    a = Item(url="https://facebook.com/page-one", source="social_web_index", source_type="social",
+             title="Link to facebook.com", text="The site owner hides the web page description.")
+    b = Item(url="https://facebook.com/page-two", source="social_web_index", source_type="social",
+             title="Link to facebook.com", text="The site owner hides the web page description.")
+    assert _dedupe_key(a) != _dedupe_key(b)
+    news1 = Item(url="https://a.example/x", source="gdelt", source_type="news", title="Same story", text="")
+    news2 = Item(url="https://news.google.com/rss/articles/x", source="google_news", source_type="news", title="Same story", text="")
+    assert _dedupe_key(news1) == _dedupe_key(news2)             # syndicated news still merges

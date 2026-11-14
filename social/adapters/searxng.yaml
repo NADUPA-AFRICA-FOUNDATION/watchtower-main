@@ -1,0 +1,15 @@
+# A self-hosted SearXNG instance (services/searxng, docker-compose.osint.yml): keyless,
+# open source, and it queries several engines at once (Google, Bing, Brave, Mojeek, ...), so
+# one engine blocking does not empty the answer. Off unless SEARXNG_URL is set.
+#
+# It runs on your server, so the engines see your server's address: a datacenter host can
+# still be challenged by some of them. The response lists the engines that did not answer;
+# when every engine failed, the result is reported as blocked, never as "nothing found".
+name: searxng
+url_env: SEARXNG_URL
+path: /search
+query_template: '"{term}" site:{domain}'
+params: {format: json, safesearch: "0"}
+min_interval_seconds: 2
+cache_ttl_seconds: 21600
+max_results: 20

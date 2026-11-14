@@ -12,6 +12,7 @@ to keyword-overlap ranking, but you still get results.
 
 from __future__ import annotations
 
+import inspect
 import re
 import time
 from collections import Counter
@@ -24,7 +25,7 @@ from core.enrich import Enricher
 from core.fetch import Fetcher
 from core.models import Item
 from core.sources import (BACKENDS, DEFAULT_BACKENDS, SourceError, SourceSkipped,
-                          is_google_news_link)
+                          behavioural_signals, is_google_news_link, is_likely_lure)
 
 STOPWORDS = {
     "the", "a", "an", "and", "or", "of", "in", "on", "for", "to", "at", "by",
@@ -122,6 +123,12 @@ def _dedupe_key(item: Item) -> str:
     there is no text, so two different articles under the same headline are
     still kept apart by their bodies.
     """
+    # A social result is an account or a post, and two of them are different leads even when
+    # the index gives them the same generic title and blurb ("Link to facebook.com", "The site
+    # owner hides the web page description"). Title or content would merge them; the URL keeps
+    # them apart. Syndication, the reason dedupe ignores URLs, does not happen to accounts.
+    if item.source_type == "social" and item.source == "social_web_index":
+        return "url:" + item.url
     if not item.text.strip() and item.title.strip():
         return "title:" + _norm_title(item.title)
     return item.content_hash
@@ -177,15 +184,13 @@ def _adjust(score: int, item: Item) -> int:
     extra = max(0, int(item.raw_meta.get("corroboration", 1)) - 1)
     adjusted += min(extra * 6, 18)
 
-    # Bait phrases on an indexed social lead ("guaranteed", "hit admin inbox",
-    # "slots almost full"). Additive and capped like corroboration: it lifts a
-    # lure above how-to videos, it cannot make an unrelated row relevant.
-    from core.fraud_lexicon import SUBJECT_FAMILIES
-    # Subject families ("fuliza limit increase") match every on-topic result, so they say nothing
-    # about whether it is a lure; only behavioural families (fees, funnels, guarantees...) count.
-    bait = [b for b in (item.raw_meta.get("bait_signals") or []) if b not in SUBJECT_FAMILIES]
-    if len(bait) >= 2 and not item.raw_meta.get("advisory"):
-        adjusted += min(len(bait) * 6, 18)
+    # Indexed social leads: an account NAMED for the scam ("Fuliza Limit Increase") gets the full
+    # capped boost by itself; otherwise two behavioural families must agree, and a warning about
+    # a scam never counts. Additive and capped like corroboration: it lifts a lure above how-to
+    # videos, it cannot make an unrelated row relevant. `likely_lure` is the one flag to read.
+    if is_likely_lure(item.raw_meta):
+        adjusted += 18 if item.raw_meta.get("lure_identity") else min(len(behavioural_signals(item.raw_meta)) * 6, 18)
+        item.raw_meta["likely_lure"] = True
 
     if _headline_only(item):
         # Cap rather than scale: an unread headline should not reach the top
@@ -283,7 +288,18 @@ def sweep(query: str, fetcher: Fetcher, hours: int = 72,
         runnable.append((name, fn))
 
     def run_backend(name, fn):
-        return name, fn(query, fetcher, hours=hours, limit=limit)
+        # A backend that takes minutes can report as it goes. Opt-in by signature, so the
+        # one-function backend contract is unchanged for everything else.
+        extra = {}
+        try:
+            wants_partial = "on_partial" in inspect.signature(fn).parameters
+        except (TypeError, ValueError):
+            wants_partial = False
+        if wants_partial:
+            extra["on_partial"] = lambda new, total, name=name: progress(
+                {"type": "partial", "name": name, "count": total,
+                 "preview": [_preview(item, terms) for item in new[:5]]})
+        return name, fn(query, fetcher, hours=hours, limit=limit, **extra)
 
     # Not a `with` block: __exit__ calls shutdown(wait=True), which blocks until
     # the slowest backend finishes and would make the budget cosmetic — we'd

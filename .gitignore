@@ -27,3 +27,6 @@ venv/
 # Hunter SQLite sidecar files
 *.db-wal
 *.db-shm
+
+# Node (Convex functions and tooling)
+node_modules/

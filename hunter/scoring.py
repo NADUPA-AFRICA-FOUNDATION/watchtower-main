@@ -352,6 +352,12 @@ def gather_inputs(graph, cid: str, domain: str, brand: Brand, cfg: HuntConfig, n
     inp.pages = [e for (t, _), e in sorted(latest.items(), key=lambda kv: str(kv[0])) if t == "page_signals"]
     inp.http = [e for (t, _), e in sorted(latest.items(), key=lambda kv: str(kv[0])) if t == "http_response"]
     inp.threat_hits = [e for (t, _), e in latest.items() if t == "threat_feed_hit"]
+    # Evidence is append-only, so a hit outlives the listing. A later complete check that found
+    # nothing supersedes it; a partial or failed check does not, because that is "could not look".
+    check = latest.get(("threat_feed_check", ""))
+    if check and inp.threat_hits and check.facts.get("status") == "checked" and not check.facts.get("hits") \
+            and all(check.at > h.at for h in inp.threat_hits):
+        inp.threat_hits = []
 
     confirmed = set(cfg.scoring.confirmed_verdicts)
     seen = set()

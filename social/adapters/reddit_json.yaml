@@ -1,0 +1,14 @@
+# Reddit's unauthenticated post JSON. DISABLED: in the Phase 1 matrix every unauthenticated
+# Reddit endpoint refused the client (403, 429, or a redirect to login). Reddit hits therefore
+# stay snippet_only. If a later matrix run shows `reddit permalink.json` as ok, set enabled: true.
+name: reddit_json
+enabled: false
+platform: reddit
+url_pattern: '^https://reddit\.com/r/[^/]+/comments/[a-z0-9]+'
+suffix: ".json?limit=1&raw_json=1"
+host: "https://www.reddit.com"
+min_interval_seconds: 6
+cache_ttl_seconds: 21600
+rate_limited_status: [429]
+blocked_status: [401, 403]
+not_found_status: [404]

@@ -12,8 +12,10 @@ from .alerts import AlertEngine
 from .enrich.dns import system_lookup
 from .enrich.pipeline import EnrichContext, Enrichers
 from .enrich.rdap import RdapClient
+from .enrich.threat import ThreatFeeds
 from .enrich.tls import TlsEnricher
 from .providers.ct import CertificateTransparencyProvider
+from .providers.nrd import NewlyRegisteredProvider
 from .providers.permutation import PermutationProvider
 from .providers.search_discovery import SearchDiscoveryProvider
 from .ratelimit import RateLimiter
@@ -35,13 +37,15 @@ def build_services(cfg, db_path: str, *, require_persistent: bool = False) -> Se
     acquire = NativeFetcher.create(cfg.acquisition, user_agent())
     searcher = DuckDuckGoHtml(limiter=RateLimiter(pc.search_min_interval_seconds), timeout=pc.search_timeout_seconds) if pc.search else None
     reverse = HackerTargetReverseIp() if pc.reverse_ip else None
+    threat = ThreatFeeds(cache_hours=e.threat_feed_cache_hours) if e.threat_feeds else None
     ctx = EnrichContext(store, graph, cfg, {b.name: b for b in cfg.brands},
-                        Enrichers(system_lookup(e.dns_timeout_seconds), rdap, TlsEnricher(e.tls_timeout_seconds), acquire, searcher, reverse))
+                        Enrichers(system_lookup(e.dns_timeout_seconds), rdap, TlsEnricher(e.tls_timeout_seconds), acquire, searcher, reverse, threat))
     sv = Services(store, graph, ctx, CertificateTransparencyProvider(), PermutationProvider(),
                   alerts=AlertEngine(store, graph, cfg))
+    sv.newly_registered = NewlyRegisteredProvider(user_agent=user_agent())
     if searcher is not None:
         sv.search_discovery = SearchDiscoveryProvider(
             searcher, queries_available=lambda: pc.max_search_queries_per_day - len(store.search_events_24h()),
             on_query=lambda q: store.log_event("system:search", "discovery_search", q))
-    sv.closers = [http.aclose, acquire.close, sv.ct.close] + ([searcher.close] if searcher else []) + ([reverse.close] if reverse else [])
+    sv.closers = [http.aclose, acquire.close, sv.ct.close, sv.newly_registered.close] + ([searcher.close] if searcher else []) + ([reverse.close] if reverse else []) + ([threat.close] if threat else [])
     return sv

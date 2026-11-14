@@ -381,9 +381,9 @@ $("#reset-controls").onclick = resetMonitorControls;
 /* Two tools, one front door. The views are independent — nothing on the
    scamscan side reads watchtower's store and vice versa — so switching sides
    is only ever showing and hiding, never a state handover. */
-const VIEWS = ["sweep", "archive", "discover", "queue", "score", "hunt", "campaigns", "huntops"];
+const VIEWS = ["sweep", "archive", "social", "watchlist", "discover", "queue", "score", "hunt", "campaigns", "huntops"];
 const MODE_VIEWS = {
-  monitor: ["sweep", "archive"],
+  monitor: ["sweep", "archive", "social", "watchlist"],
   investigate: ["discover", "queue", "score"],
   hunt: ["hunt", "campaigns", "huntops"],
 };
@@ -430,6 +430,7 @@ document.querySelectorAll(".tab").forEach((tab) => {
     if (heading) heading.focus();
     if (tab.dataset.view === "queue") loadQueue();
     if (window.hunterOnView) window.hunterOnView(tab.dataset.view);
+    if (window.socialOnView) window.socialOnView(tab.dataset.view);
   };
 });
 
@@ -529,6 +530,18 @@ function startSweep(q) {
     showPreviews(d.preview || []);
   });
 
+  // A slow source reporting as it goes (the social index answers platform by
+  // platform over about a minute). The lane stays pending: this is a running
+  // count, not the source's final answer, and must not render as one.
+  stream.addEventListener("partial", (ev) => {
+    const d = JSON.parse(ev.data);
+    const lane = laneOf[d.name];
+    if (!lane) return;
+    lane.querySelector(".lane-count").textContent = `${d.count}…`;
+    lane.style.setProperty("--w", `${Math.min(100, (d.count / 20) * 100) || 4}%`);
+    showPreviews(d.preview || []);
+  });
+
   stream.addEventListener("stage", (ev) => {
     const d = JSON.parse(ev.data);
     const label = {
@@ -602,6 +615,8 @@ function gauge(band) {
   return g;
 }
 
+const VERDICT_LEVELS = new Set(["lure", "check", "advisory", "official", "topic", "none"]);
+
 function card(item) {
   const c = el("article", "card");
   c.style.setProperty("--band", BAND_COLOUR[item.band] || "var(--weak)");
@@ -636,6 +651,25 @@ function card(item) {
     const h = el("span", "flag", "headline only");
     h.title = "No article body was read — scored on the headline alone.";
     top.append(h);
+  }
+
+  // What this result looks like, why, and what to do, in plain words. The
+  // score answers "is it about my query"; this answers "is it a scam", which
+  // is the question people actually bring. Level comes from a fixed server
+  // list; anything else falls back to the neutral style.
+  const verdict = item.raw_meta?.verdict;
+  if (verdict?.label) {
+    const level = VERDICT_LEVELS.has(verdict.level) ? verdict.level : "none";
+    const box = el("div", `verdict verdict-${level}`);
+    box.append(el("strong", "verdict-label", verdict.label));
+    if (verdict.reason) box.append(el("span", "verdict-reason", verdict.reason));
+    if (verdict.action) box.append(el("span", "verdict-action", verdict.action));
+    (verdict.details || []).forEach((line) => box.append(el("span", "verdict-detail", line)));
+    const age = item.raw_meta.cached_age_seconds;
+    if (age != null) {
+      box.append(el("span", "verdict-detail", `From a search run ${Math.max(1, Math.round(age / 60))} min ago`));
+    }
+    c.append(box);
   }
 
   const meta = el("p", "card-meta");

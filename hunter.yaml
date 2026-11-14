@@ -36,10 +36,21 @@ certificate_transparency:
   max_names_per_certificate: 50
   timeout_seconds: 30
 
+# Newly registered domains (WhoisDS free daily list; reuse allowed per its page). Sees a
+# lookalike the day it is registered, before it has a certificate, and works when crt.sh is down.
+newly_registered:
+  enabled: true
+  days_back: 3
+  max_candidates: 300
+
 budgets:
   max_candidates_per_run: 500
 
 enrichment:
+  # Match candidates against free phishing lists (Phishing.Database, OpenPhish). The lists are
+  # downloaded and matched locally; a candidate's name is never sent to a third party.
+  threat_feeds: true
+  threat_feed_cache_hours: 12
   dns_timeout_seconds: 5
   rdap_min_interval_seconds: 1.0
   rdap_cache_hours: 24
@@ -119,6 +130,7 @@ scheduler:
   ct_minutes: 30
   permutation_hours: 24
   search_discovery_hours: 6
+  newly_registered_hours: 6
   enrich_seconds: 60
   enrich_limit: 20
   refresh_minutes: 60

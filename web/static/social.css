@@ -1,0 +1,57 @@
+/* Social inbox and watchlist. Tokens come from style.css; colour is used only where it asks
+   the reader to do something (a likely scam, a blocked source), following the relevance ramp. */
+.sx-row { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 12px; }
+.sx-row label { display: grid; gap: 4px; font-size: 12px; color: var(--muted); min-width: 180px; }
+.sx-row .sx-grow { flex: 1 1 320px; }
+.sx-row input, .sx-row select { min-height: 40px; padding: 0 12px; border: 1px solid var(--rule); border-radius: 10px; background: var(--surface); color: var(--ink); font: inherit; }
+.sx-platforms { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 12px; }
+.sx-check { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
+.sx-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; margin: 20px 0 12px; }
+.sx-filters { display: flex; flex-wrap: wrap; gap: 6px; }
+.sx-h2 { margin: 28px 0 10px; font-size: 16px; }
+.sx-error { color: var(--high); }
+.sx-muted { color: var(--muted); }
+
+.sx-hit, .sx-watch, .sx-empty, .sx-run { border: 1px solid var(--rule); border-radius: 14px; background: var(--surface); padding: 16px 18px; margin-bottom: 12px; overflow-wrap: anywhere; }
+.sx-watch { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; }
+.sx-watch.sx-paused { opacity: .65; }
+.sx-empty h3, .sx-run h3, .sx-hit h3 { margin: 0 0 6px; font-size: 15.5px; line-height: 1.35; }
+.sx-empty p { margin: 6px 0; color: var(--muted); }
+.sx-sources { margin: 8px 0; padding-left: 18px; color: var(--ink); font-size: 13px; }
+.sx-sources li { margin: 4px 0; }
+
+.sx-hit-top { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 8px; }
+.sx-platform { font: 600 11px var(--mono); letter-spacing: .06em; text-transform: uppercase; }
+.sx-score { margin-left: auto; font: 600 15px var(--mono); }
+.sx-review { font: 600 10px var(--mono); text-transform: uppercase; letter-spacing: .06em; color: var(--muted); border: 1px solid var(--rule); border-radius: 999px; padding: 2px 8px; }
+.sx-text { margin: 6px 0; font-size: 14px; line-height: 1.5; }
+.sx-meta { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 6px 0; color: var(--muted); font: 12px var(--mono); }
+.sx-terms, .sx-missing { margin: 6px 0; font-size: 12px; color: var(--muted); }
+.sx-term { display: inline-block; margin-left: 4px; padding: 1px 8px; border-radius: 999px; background: var(--sunk); color: var(--ink); }
+.sx-why { margin: 8px 0; font-size: 12px; color: var(--muted); }
+.sx-why summary { cursor: pointer; }
+.sx-why ul { margin: 6px 0 0; padding-left: 18px; }
+.sx-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; }
+.sx-open { font-weight: 600; color: var(--ink); margin-right: 6px; }
+.sx-verdict { margin: 8px 0; padding: 8px 12px; border-left: 4px solid var(--weak); border-radius: 8px; background: rgba(255, 255, 255, .6); font-size: 13px; }
+.sx-verdict-lure { border-left-color: var(--high); background: rgba(168, 44, 34, .06); }
+.sx-verdict-lure strong { color: var(--high); }
+.sx-verdict-check { border-left-color: var(--med); }
+.sx-verdict-check strong { color: var(--med); }
+.sx-verdict-advisory, .sx-verdict-official { border-left-color: var(--low); }
+
+/* Status badges: what kind of answer this is. Blocks are the only alarming colour. */
+.sx-badge { display: inline-block; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--rule); font: 600 10px var(--mono); letter-spacing: .04em; text-transform: uppercase; color: var(--muted); white-space: nowrap; }
+.sx-ok { color: var(--low); border-color: var(--low); }
+.sx-partial { color: var(--low); }
+.sx-snippet_only, .sx-no_results, .sx-not_found, .sx-queued, .sx-disabled { color: var(--muted); }
+.sx-blocked, .sx-rate_limited, .sx-error.sx-badge { color: var(--high); border-color: var(--high); }
+
+.sx-table-wrap { overflow-x: auto; margin-top: 10px; }
+.sx-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.sx-table th { text-align: left; font: 600 10px var(--mono); text-transform: uppercase; letter-spacing: .05em; color: var(--muted); padding: 8px 10px; border-bottom: 1px solid var(--rule); }
+.sx-table td { padding: 8px 10px; border-bottom: 1px solid var(--sunk); vertical-align: top; }
+.sx-table tr:last-child td { border-bottom: 0; }
+.sx-run-hits { margin-top: 14px; }
+[data-theme="terminal"] .sx-hit, [data-theme="terminal"] .sx-watch, [data-theme="terminal"] .sx-empty, [data-theme="terminal"] .sx-run { border-radius: 0; background: transparent; }
+@media (max-width: 600px) { .sx-score { margin-left: 0; } .sx-row label { min-width: 0; flex: 1 1 100%; } }
