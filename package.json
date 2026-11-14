@@ -1,7 +1,14 @@
 {
   "name": "watchtower",
   "private": true,
+  "scripts": {
+    "convex:check": "tsc --noEmit -p convex"
+  },
+  "dependencies": {
+    "convex": "^1.50.0"
+  },
   "devDependencies": {
-    "@playwright/test": "latest"
+    "@playwright/test": "latest",
+    "typescript": "^5.9.0"
   }
 }
