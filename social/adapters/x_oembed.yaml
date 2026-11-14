@@ -1,0 +1,13 @@
+# X's documented publish oEmbed endpoint. Passed the Phase 1 matrix: author name, author URL
+# and the post text. It carries no engagement counts, so an enriched X hit is `partial`.
+name: x_oembed
+enabled: true
+platform: x
+endpoint: "https://publish.twitter.com/oembed"
+params: {omit_script: "1", dnt: "true"}
+url_pattern: '^https://x\.com/[^/]+/status/\d+'
+min_interval_seconds: 3
+cache_ttl_seconds: 86400
+rate_limited_status: [429]
+blocked_status: [401, 403]
+not_found_status: [404]
